@@ -44,8 +44,10 @@ extern "C" {
 namespace casadi {
 
   struct CASADI_CONIC_QPSWIFT_EXPORT QpswiftMemory : public ConicMemory {
-    // Structures
-    QPSWIFTWorkspace* work;
+    // Stats
+    double tsetup, tsolve, kkt_time, ldl_numeric;
+    int iter_count;
+
 
     /// Constructor
     QpswiftMemory();
@@ -118,7 +120,12 @@ namespace casadi {
     // Number of nonzeros in upper part of Hessian
     casadi_int nnzHupp_, nnzA_;
 
-    QPSWIFTSettings settings_;
+    // Settings
+    qp_int maxit_;
+    qp_real reltol_;
+    qp_real abstol_;
+    qp_real sigma_;
+    qp_int verbose_;
 
     bool warm_start_primal_, warm_start_dual_;
 

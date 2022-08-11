@@ -26,6 +26,6 @@
       #include "qpswift_interface.hpp"
       #include <string>
 
-      const std::string casadi::OsqpInterface::meta_doc=
+      const std::string casadi::QpswiftInterface::meta_doc=
 "\n"
 ;

@@ -61,13 +61,7 @@ namespace casadi {
   = {{&Conic::options_},
      {{"qpswift",
        {OT_DICT,
-        "const Options to be passed to qpswift."}},
-      {"warm_start_primal",
-       {OT_BOOL,
-        "Use x0 input to warmstart [Default: true]."}},
-      {"warm_start_dual",
-       {OT_BOOL,
-        "Use lam_a0 and lam_x0 input to warmstart [Default: truw]."}}
+        "const Options to be passed to qpswift."}}
      }
   };
 
@@ -75,125 +69,40 @@ namespace casadi {
     // Initialize the base classes
     Conic::init(opts);
 
-    qpswift_set_default_settings(&settings_);
-    settings_.warm_start = false;
-
-    warm_start_primal_ = true;
-    warm_start_dual_ = true;
+    maxit_ = 0;
+    reltol_ = 0.;
+    abstol_ = 0.;
+    sigma_ = 0.;
+    verbose_ = 0;
 
     // Read options
     for (auto&& op : opts) {
-      if (op.first=="warm_start_primal") {
-        warm_start_primal_ = op.second;
-      } else if (op.first=="warm_start_dual") {
-        warm_start_dual_ = op.second;
-      } else if (op.first=="qpswift") {
+      if (op.first=="qpswift") {
         const Dict& opts = op.second;
         for (auto&& op : opts) {
-          if (op.first=="rho") {
-            settings_.rho = op.second;
+          if (op.first=="maxit") {
+            int temp = op.second;
+            maxit_ = static_cast<qp_int>(temp);
+          } else if (op.first=="reltol") {
+            reltol_ = op.second;
+          } else if (op.first=="abstol") {
+            abstol_ = op.second;
           } else if (op.first=="sigma") {
-            settings_.sigma = op.second;
-          } else if (op.first=="scaling") {
-            settings_.scaling = op.second;
-          } else if (op.first=="adaptive_rho") {
-            settings_.adaptive_rho = op.second;
-          } else if (op.first=="adaptive_rho_interval") {
-            settings_.adaptive_rho_interval = op.second;
-          } else if (op.first=="adaptive_rho_tolerance") {
-            settings_.adaptive_rho_tolerance = op.second;
-          //} else if (op.first=="adaptive_rho_fraction") {
-          //  settings_.adaptive_rho_fraction = op.second;
-          } else if (op.first=="max_iter") {
-            settings_.max_iter = op.second;
-          } else if (op.first=="eps_abs") {
-            settings_.eps_abs = op.second;
-          } else if (op.first=="eps_rel") {
-            settings_.eps_rel = op.second;
-          } else if (op.first=="eps_prim_inf") {
-            settings_.eps_prim_inf = op.second;
-          } else if (op.first=="eps_dual_inf") {
-            settings_.eps_dual_inf = op.second;
-          } else if (op.first=="alpha") {
-            settings_.alpha = op.second;
-          } else if (op.first=="delta") {
-            settings_.delta = op.second;
-          } else if (op.first=="polish") {
-            settings_.polish = op.second;
-          } else if (op.first=="polish_refine_iter") {
-            settings_.polish_refine_iter = op.second;
+            sigma_ = op.second;
           } else if (op.first=="verbose") {
-            settings_.verbose = op.second;
-          } else if (op.first=="scaled_termination") {
-            settings_.scaled_termination = op.second;
-          } else if (op.first=="check_termination") {
-            settings_.check_termination = op.second;
-          } else if (op.first=="warm_start") {
-            casadi_error("QPSWIFT's warm_start option is impure and therefore disabled. "
-                         "Use CasADi options 'warm_start_primal' and 'warm_start_dual' instead.");
-          //} else if (op.first=="time_limit") {
-          //  settings_.time_limit = op.second;
+            int temp = op.second;
+            verbose_ = static_cast<qp_int>(temp);
           } else {
             casadi_error("Not recognised");
           }
         }
       }
     }
-
-    nnzHupp_ = H_.nnz_upper();
-    nnzA_ = A_.nnz()+nx_;
-
-    alloc_w(nnzHupp_+nnzA_, false);
-    alloc_w(2*nx_+2*na_, false);
   }
 
   int QpswiftInterface::init_mem(void* mem) const {
     if (Conic::init_mem(mem)) return 1;
-    auto m = static_cast<QpswiftMemory*>(mem);
 
-    Sparsity Asp = vertcat(Sparsity::diag(nx_), A_);
-    std::vector<double> dummy(max(nx_+na_, max(Asp.nnz(), H_.nnz())));
-
-    std::vector<c_int> A_row = vector_static_cast<c_int>(Asp.get_row());
-    std::vector<c_int> A_colind = vector_static_cast<c_int>(Asp.get_colind());
-    std::vector<c_int> H_row = vector_static_cast<c_int>(H_.get_row());
-    std::vector<c_int> H_colind = vector_static_cast<c_int>(H_.get_colind());
-
-    csc A;
-    A.m = nx_ + na_;
-    A.n = nx_;
-    A.nz = nnzA_;
-    A.nzmax = A.nz;
-    A.x = get_ptr(dummy);
-    A.i = get_ptr(A_row);
-    A.p = get_ptr(A_colind);
-
-    csc H;
-    H.m = nx_;
-    H.n = nx_;
-    H.nz = H_.nnz();
-    H.nzmax = H_.nnz();
-    H.x = get_ptr(dummy);
-    H.i = get_ptr(H_row);
-    H.p = get_ptr(H_colind);
-
-    QPSWIFTData data;
-    // Populate data
-    data.n = nx_;
-    data.m = nx_ + na_;
-    // csc_matrix in mem
-    data.P = &H;
-    data.q = get_ptr(dummy);
-    data.A = &A;
-    data.l = get_ptr(dummy);
-    data.u = get_ptr(dummy);
-
-    // Setup workspace
-    m->work = qpswift_setup(&data, &settings_);
-
-    m->fstats["preprocessing"]  = FStats();
-    m->fstats["solver"]         = FStats();
-    m->fstats["postprocessing"] = FStats();
     return 0;
   }
 
@@ -205,78 +114,118 @@ namespace casadi {
   solve(const double** arg, double** res, casadi_int* iw, double* w, void* mem) const {
     auto m = static_cast<QpswiftMemory*>(mem);
 
-    // Inputs
-    const double *a=arg[CONIC_A],
-                 *h=arg[CONIC_H];
+    // Null pointer
+    qp_int *null_int = NULL;
+    qp_real *null_real = NULL;
 
-    // Outputs
-    double *x=res[CONIC_X],
-           *cost=res[CONIC_COST],
-           *lam_a=res[CONIC_LAM_A],
-           *lam_x=res[CONIC_LAM_X];
+    // QP var
+    QP *qp_prob;
 
-    int ret;
+    // Number of desiscion vars and constraints
+    qp_int nc = nx_;
+    qp_int mc = 2*(nx_+na_); // 2 times because we have a double inequality
+    qp_int pc = 0;
 
-    // Set objective
+    // P sparsity
+    std::vector<qp_int> Pjc_vec = vector_static_cast<qp_int>(H_.get_colind());
+    std::vector<qp_int> Pir_vec = vector_static_cast<qp_int>(H_.get_row());
+    qp_int* Pjc = Pjc_vec.data();
+    qp_int* Pir = Pir_vec.data();
+
+    // P data
+    const double *h_prob = arg[CONIC_H];
+    std::vector<qp_real> Ppr_vec = vector_static_cast<qp_real>(std::vector<double>(h_prob, h_prob+H_.nnz()));
+    qp_real* Ppr = Ppr_vec.data();
+
+    // G sparsity (is formed like [I; -I; A; -A])
+    Sparsity G_sp = Sparsity::diag(nx_, nx_);
+    G_sp.append(Sparsity::diag(nx_, nx_));
+    G_sp.append(A_);
+    G_sp.append(A_);
+
+    std::vector<qp_int> Gjc_vec = vector_static_cast<qp_int>(G_sp.get_colind());
+    std::vector<qp_int> Gir_vec = vector_static_cast<qp_int>(G_sp.get_row());
+    qp_int* Gjc = Gjc_vec.data();
+    qp_int* Gir = Gir_vec.data();
+
+    // G data
+    const double *a_prob = arg[CONIC_A];
+    std::vector<qp_real> A_data = vector_static_cast<qp_real>(std::vector<double>(a_prob, a_prob+A_.nnz()));
+    std::vector<qp_real> Gpr_vec;
+    Gpr_vec.reserve(2*(nx_ + A_.nnz()));
+    fill_n(Gpr_vec.begin(), nx_, 1);
+    fill_n(Gpr_vec.begin()+nx_, nx_, -1);
+    Gpr_vec.insert(Gpr_vec.begin()+2*nx_, A_data.begin(), A_data.end());
+    transform(Gpr_vec.begin()+2*nx_+A_.nnz(), Gpr_vec.begin()+2*(nx_+A_.nnz()), A_data.begin(), std::negate<qp_real>());
+    qp_real* Gpr = Gpr_vec.data();
+
+    // c data
+    qp_real* c = NULL;
     if (arg[CONIC_G]) {
-      ret = qpswift_update_lin_cost(m->work, arg[CONIC_G]);
-      casadi_assert(ret==0, "Problem in qpswift_update_lin_cost");
+      const double *g = arg[CONIC_G];
+      std::vector<qp_real> c_vec = vector_static_cast<qp_real>(std::vector<double>(g, g+nx_));
+      c = c_vec.data();
     }
 
-    // Set bounds
-    casadi_copy(arg[CONIC_LBX], nx_, w);
-    casadi_copy(arg[CONIC_LBA], na_, w+nx_);
-    casadi_copy(arg[CONIC_UBX], nx_, w+nx_+na_);
-    casadi_copy(arg[CONIC_UBA], na_, w+2*nx_+na_);
-
-    ret = qpswift_update_bounds(m->work, w, w+nx_+na_);
-    casadi_assert(ret==0, "Problem in qpswift_update_bounds");
-
-    // Project Hessian
-    casadi_tri_project(arg[CONIC_H], H_, w, false);
-
-    // Get contraint matrix
-    const casadi_int* colind = A_.colind();
-    double* A = w + nnzHupp_;
-    // Get constraint matrix
-    casadi_int offset = 0;
-    // Loop over columns
-    for (casadi_int i=0; i<nx_; ++i) {
-      A[offset] = 1;
-      offset++;
-      casadi_int n = colind[i+1]-colind[i];
-      casadi_copy(a+colind[i], n, A+offset);
-      offset+= n;
-    }
-
-    // Pass Hessian and constraint matrices
-    ret = qpswift_update_P_A(m->work, w, nullptr, nnzHupp_, A, nullptr, nnzA_);
-    casadi_assert(ret==0, "Problem in qpswift_update_P_A");
+    // h data
+    // TODO(@KobeBergmans): It is probably more efficient to provide an equality constraint if lbx = ubx / lba = uba
+    const double *lbx = arg[CONIC_LBX];
+    const double *lba = arg[CONIC_LBA];
+    const double *ubx = arg[CONIC_UBX];
+    const double *uba = arg[CONIC_UBA];
+    std::vector<qp_real> lbx_data = vector_static_cast<qp_real>(std::vector<double>(lbx, lbx+nx_));
+    std::vector<qp_real> lba_data = vector_static_cast<qp_real>(std::vector<double>(lba, lba+na_));
+    std::vector<qp_real> ubx_data = vector_static_cast<qp_real>(std::vector<double>(ubx, ubx+nx_));
+    std::vector<qp_real> uba_data = vector_static_cast<qp_real>(std::vector<double>(uba, uba+na_));
+    std::vector<qp_real> h_data;
+    h_data.reserve(2*(nx_ + na_));
+    h_data.insert(h_data.begin(), ubx_data.begin(), ubx_data.end());
+    transform(h_data.begin()+nx_, h_data.begin()+2*nx_, lbx_data.begin(), std::negate<qp_real>());;
+    h_data.insert(h_data.begin()+2*nx_, uba_data.begin(), uba_data.end());
+    transform(h_data.begin()+2*nx_+na_, h_data.begin()+2*(nx_+na_), lba_data.begin(), std::negate<qp_real>());
+    qp_real* h = h_data.data();
 
 
-    if (warm_start_primal_) {
-      ret = qpswift_warm_start_x(m->work, arg[CONIC_X0]);
-      casadi_assert(ret==0, "Problem in qpswift_warm_start_x");
-    }
+    // Get solver
+    qp_prob = QP_SETUP(nc, mc, pc, Pjc, Pir, Ppr, null_int, null_int, null_real, Gjc, Gir, Gpr, c, h, null_real, 
+                    0, NULL);
 
-    if (warm_start_dual_) {
-      casadi_copy(arg[CONIC_LAM_X0], nx_, w);
-      casadi_copy(arg[CONIC_LAM_A0], na_, w+nx_);
-      ret = qpswift_warm_start_y(m->work, w);
-      casadi_assert(ret==0, "Problem in qpswift_warm_start_y");
-    }
+    // Change solver settings
+    if (maxit_ != 0) qp_prob->options->maxit = maxit_;
+    if (reltol_ != 0.) qp_prob->options->reltol = reltol_;
+    if (abstol_ != 0.) qp_prob->options->abstol = abstol_;
+    if (sigma_ != 0.) qp_prob->options->sigma = sigma_;
+    if (verbose_ != 0) qp_prob->options->verbose = verbose_;
 
-    // Solve Problem
-    ret = qpswift_solve(m->work);
-    casadi_assert(ret==0, "Problem in qpswift_solve");
+    // Solve QP
+    qp_int exit_code = QP_SOLVE(qp_prob);
+    // TODO(@KobeBergmans): Do something with the exit code
+    if (exit_code == QP_OPTIMAL) {
+      m->success = true;
+      m->unified_return_status = SOLVER_RET_SUCCESS;
+    } else if (exit_code == QP_FATAL || exit_code == QP_KKTFAIL || exit_code == QP_MAXIT) {
+      m->success = false;
+      m->unified_return_status = SOLVER_RET_INFEASIBLE;
+      return 1;
+    } 
 
-    casadi_copy(m->work->solution->x, nx_, res[CONIC_X]);
-    casadi_copy(m->work->solution->y, nx_, res[CONIC_LAM_X]);
-    casadi_copy(m->work->solution->y+nx_, na_, res[CONIC_LAM_A]);
-    if (res[CONIC_COST]) *res[CONIC_COST] = m->work->info->obj_val;
+    // Copy output
+    casadi_copy(qp_prob->x, nx_, res[CONIC_X]);
+    casadi_copy(qp_prob->z, nx_, res[CONIC_LAM_X]);
+    casadi_axpy(nx_, -1., qp_prob->z+nx_, res[CONIC_LAM_X]);
+    casadi_copy(qp_prob->z+2*nx_, na_, res[CONIC_LAM_A]);
+    casadi_axpy(na_, -1., qp_prob->z+2*nx_+na_, res[CONIC_LAM_A]);
+    if (res[CONIC_COST]) *res[CONIC_COST] = qp_prob->stats->fval;
 
-    m->success = m->work->info->status_val == QPSWIFT_SOLVED;
-    if (m->success) m->unified_return_status = SOLVER_RET_SUCCESS;
+    // Copy stats
+    m->tsetup = qp_prob->stats->tsetup;
+    m->tsolve = qp_prob->stats->tsolve;
+    m->kkt_time = qp_prob->stats->kkt_time;
+    m->ldl_numeric = qp_prob->stats->ldl_numeric;
+    m->iter_count = static_cast<int>(qp_prob->stats->IterationCount);
+
+    // Cleanup
+    QP_CLEANUP(qp_prob);
 
     return 0;
   }
@@ -325,28 +274,28 @@ namespace casadi {
     g << "data.l = dummy;\n";
     g << "data.u = dummy;\n";
 
-    g.local("settings", "QPSWIFTSettings");
-    g << "qpswift_set_default_settings(&settings);\n";
-    g << "settings.rho = " << settings_.rho << ";\n";
-    g << "settings.sigma = " << settings_.sigma << ";\n";
-    g << "settings.scaling = " << settings_.scaling << ";\n";
-    g << "settings.adaptive_rho = " << settings_.adaptive_rho << ";\n";
-    g << "settings.adaptive_rho_interval = " << settings_.adaptive_rho_interval << ";\n";
-    g << "settings.adaptive_rho_tolerance = " << settings_.adaptive_rho_tolerance << ";\n";
+    // g.local("settings", "QPSWIFTSettings");
+    // g << "qpswift_set_default_settings(&settings);\n";
+    // g << "settings.rho = " << settings_.rho << ";\n";
+    // g << "settings.sigma = " << settings_.sigma << ";\n";
+    // g << "settings.scaling = " << settings_.scaling << ";\n";
+    // g << "settings.adaptive_rho = " << settings_.adaptive_rho << ";\n";
+    // g << "settings.adaptive_rho_interval = " << settings_.adaptive_rho_interval << ";\n";
+    // g << "settings.adaptive_rho_tolerance = " << settings_.adaptive_rho_tolerance << ";\n";
     //g << "settings.adaptive_rho_fraction = " << settings_.adaptive_rho_fraction << ";\n";
-    g << "settings.max_iter = " << settings_.max_iter << ";\n";
-    g << "settings.eps_abs = " << settings_.eps_abs << ";\n";
-    g << "settings.eps_rel = " << settings_.eps_rel << ";\n";
-    g << "settings.eps_prim_inf = " << settings_.eps_prim_inf << ";\n";
-    g << "settings.eps_dual_inf = " << settings_.eps_dual_inf << ";\n";
-    g << "settings.alpha = " << settings_.alpha << ";\n";
-    g << "settings.delta = " << settings_.delta << ";\n";
-    g << "settings.polish = " << settings_.polish << ";\n";
-    g << "settings.polish_refine_iter = " << settings_.polish_refine_iter << ";\n";
-    g << "settings.verbose = " << settings_.verbose << ";\n";
-    g << "settings.scaled_termination = " << settings_.scaled_termination << ";\n";
-    g << "settings.check_termination = " << settings_.check_termination << ";\n";
-    g << "settings.warm_start = " << settings_.warm_start << ";\n";
+    // g << "settings.max_iter = " << settings_.max_iter << ";\n";
+    // g << "settings.eps_abs = " << settings_.eps_abs << ";\n";
+    // g << "settings.eps_rel = " << settings_.eps_rel << ";\n";
+    // g << "settings.eps_prim_inf = " << settings_.eps_prim_inf << ";\n";
+    // g << "settings.eps_dual_inf = " << settings_.eps_dual_inf << ";\n";
+    // g << "settings.alpha = " << settings_.alpha << ";\n";
+    // g << "settings.delta = " << settings_.delta << ";\n";
+    // g << "settings.polish = " << settings_.polish << ";\n";
+    // g << "settings.polish_refine_iter = " << settings_.polish_refine_iter << ";\n";
+    // g << "settings.verbose = " << settings_.verbose << ";\n";
+    // g << "settings.scaled_termination = " << settings_.scaled_termination << ";\n";
+    // g << "settings.check_termination = " << settings_.check_termination << ";\n";
+    // g << "settings.warm_start = " << settings_.warm_start << ";\n";
     //g << "settings.time_limit = " << settings_.time_limit << ";\n";
 
     g << codegen_mem(g) + " = qpswift_setup(&data, &settings);\n";
@@ -410,8 +359,10 @@ namespace casadi {
 
   Dict QpswiftInterface::get_stats(void* mem) const {
     Dict stats = Conic::get_stats(mem);
-    auto m = static_cast<QpswiftMemory*>(mem);
-    stats["return_status"] = m->work->info->status;
+    for (auto&& op : stats_) {
+      stats[op.first] = op.second;
+    }
+    
     return stats;
   }
 
@@ -419,7 +370,6 @@ namespace casadi {
   }
 
   QpswiftMemory::~QpswiftMemory() {
-    qpswift_cleanup(work);
   }
 
   QpswiftInterface::QpswiftInterface(DeserializingStream& s) : Conic(s) {
@@ -428,28 +378,27 @@ namespace casadi {
     s.unpack("QpswiftInterface::nnzA", nnzA_);
     s.unpack("QpswiftInterface::warm_start_primal", warm_start_primal_);
     s.unpack("QpswiftInterface::warm_start_dual", warm_start_dual_);
-
-    qpswift_set_default_settings(&settings_);
-    s.unpack("QpswiftInterface::settings::rho", settings_.rho);
-    s.unpack("QpswiftInterface::settings::sigma", settings_.sigma);
-    s.unpack("QpswiftInterface::settings::scaling", settings_.scaling);
-    s.unpack("QpswiftInterface::settings::adaptive_rho", settings_.adaptive_rho);
-    s.unpack("QpswiftInterface::settings::adaptive_rho_interval", settings_.adaptive_rho_interval);
-    s.unpack("QpswiftInterface::settings::adaptive_rho_tolerance", settings_.adaptive_rho_tolerance);
+    s.unpack("QpswiftInterface::stats", stats_);
+    // s.unpack("QpswiftInterface::settings::rho", settings_.rho);
+    // s.unpack("QpswiftInterface::settings::sigma", settings_.sigma);
+    // s.unpack("QpswiftInterface::settings::scaling", settings_.scaling);
+    // s.unpack("QpswiftInterface::settings::adaptive_rho", settings_.adaptive_rho);
+    // s.unpack("QpswiftInterface::settings::adaptive_rho_interval", settings_.adaptive_rho_interval);
+    // s.unpack("QpswiftInterface::settings::adaptive_rho_tolerance", settings_.adaptive_rho_tolerance);
     //s.unpack("QpswiftInterface::settings::adaptive_rho_fraction", settings_.adaptive_rho_fraction);
-    s.unpack("QpswiftInterface::settings::max_iter", settings_.max_iter);
-    s.unpack("QpswiftInterface::settings::eps_abs", settings_.eps_abs);
-    s.unpack("QpswiftInterface::settings::eps_rel", settings_.eps_rel);
-    s.unpack("QpswiftInterface::settings::eps_prim_inf", settings_.eps_prim_inf);
-    s.unpack("QpswiftInterface::settings::eps_dual_inf", settings_.eps_dual_inf);
-    s.unpack("QpswiftInterface::settings::alpha", settings_.alpha);
-    s.unpack("QpswiftInterface::settings::delta", settings_.delta);
-    s.unpack("QpswiftInterface::settings::polish", settings_.polish);
-    s.unpack("QpswiftInterface::settings::polish_refine_iter", settings_.polish_refine_iter);
-    s.unpack("QpswiftInterface::settings::verbose", settings_.verbose);
-    s.unpack("QpswiftInterface::settings::scaled_termination", settings_.scaled_termination);
-    s.unpack("QpswiftInterface::settings::check_termination", settings_.check_termination);
-    s.unpack("QpswiftInterface::settings::warm_start", settings_.warm_start);
+    // s.unpack("QpswiftInterface::settings::max_iter", settings_.max_iter);
+    // s.unpack("QpswiftInterface::settings::eps_abs", settings_.eps_abs);
+    // s.unpack("QpswiftInterface::settings::eps_rel", settings_.eps_rel);
+    // s.unpack("QpswiftInterface::settings::eps_prim_inf", settings_.eps_prim_inf);
+    // s.unpack("QpswiftInterface::settings::eps_dual_inf", settings_.eps_dual_inf);
+    // s.unpack("QpswiftInterface::settings::alpha", settings_.alpha);
+    // s.unpack("QpswiftInterface::settings::delta", settings_.delta);
+    // s.unpack("QpswiftInterface::settings::polish", settings_.polish);
+    // s.unpack("QpswiftInterface::settings::polish_refine_iter", settings_.polish_refine_iter);
+    // s.unpack("QpswiftInterface::settings::verbose", settings_.verbose);
+    // s.unpack("QpswiftInterface::settings::scaled_termination", settings_.scaled_termination);
+    // s.unpack("QpswiftInterface::settings::check_termination", settings_.check_termination);
+    // s.unpack("QpswiftInterface::settings::warm_start", settings_.warm_start);
     //s.unpack("QpswiftInterface::settings::time_limit", settings_.time_limit);
   }
 
@@ -460,26 +409,26 @@ namespace casadi {
     s.pack("QpswiftInterface::nnzA", nnzA_);
     s.pack("QpswiftInterface::warm_start_primal", warm_start_primal_);
     s.pack("QpswiftInterface::warm_start_dual", warm_start_dual_);
-    s.pack("QpswiftInterface::settings::rho", settings_.rho);
-    s.pack("QpswiftInterface::settings::sigma", settings_.sigma);
-    s.pack("QpswiftInterface::settings::scaling", settings_.scaling);
-    s.pack("QpswiftInterface::settings::adaptive_rho", settings_.adaptive_rho);
-    s.pack("QpswiftInterface::settings::adaptive_rho_interval", settings_.adaptive_rho_interval);
-    s.pack("QpswiftInterface::settings::adaptive_rho_tolerance", settings_.adaptive_rho_tolerance);
+    // s.pack("QpswiftInterface::settings::rho", settings_.rho);
+    // s.pack("QpswiftInterface::settings::sigma", settings_.sigma);
+    // s.pack("QpswiftInterface::settings::scaling", settings_.scaling);
+    // s.pack("QpswiftInterface::settings::adaptive_rho", settings_.adaptive_rho);
+    // s.pack("QpswiftInterface::settings::adaptive_rho_interval", settings_.adaptive_rho_interval);
+    // s.pack("QpswiftInterface::settings::adaptive_rho_tolerance", settings_.adaptive_rho_tolerance);
     //s.pack("QpswiftInterface::settings::adaptive_rho_fraction", settings_.adaptive_rho_fraction);
-    s.pack("QpswiftInterface::settings::max_iter", settings_.max_iter);
-    s.pack("QpswiftInterface::settings::eps_abs", settings_.eps_abs);
-    s.pack("QpswiftInterface::settings::eps_rel", settings_.eps_rel);
-    s.pack("QpswiftInterface::settings::eps_prim_inf", settings_.eps_prim_inf);
-    s.pack("QpswiftInterface::settings::eps_dual_inf", settings_.eps_dual_inf);
-    s.pack("QpswiftInterface::settings::alpha", settings_.alpha);
-    s.pack("QpswiftInterface::settings::delta", settings_.delta);
-    s.pack("QpswiftInterface::settings::polish", settings_.polish);
-    s.pack("QpswiftInterface::settings::polish_refine_iter", settings_.polish_refine_iter);
-    s.pack("QpswiftInterface::settings::verbose", settings_.verbose);
-    s.pack("QpswiftInterface::settings::scaled_termination", settings_.scaled_termination);
-    s.pack("QpswiftInterface::settings::check_termination", settings_.check_termination);
-    s.pack("QpswiftInterface::settings::warm_start", settings_.warm_start);
+    // s.pack("QpswiftInterface::settings::max_iter", settings_.max_iter);
+    // s.pack("QpswiftInterface::settings::eps_abs", settings_.eps_abs);
+    // s.pack("QpswiftInterface::settings::eps_rel", settings_.eps_rel);
+    // s.pack("QpswiftInterface::settings::eps_prim_inf", settings_.eps_prim_inf);
+    // s.pack("QpswiftInterface::settings::eps_dual_inf", settings_.eps_dual_inf);
+    // s.pack("QpswiftInterface::settings::alpha", settings_.alpha);
+    // s.pack("QpswiftInterface::settings::delta", settings_.delta);
+    // s.pack("QpswiftInterface::settings::polish", settings_.polish);
+    // s.pack("QpswiftInterface::settings::polish_refine_iter", settings_.polish_refine_iter);
+    // s.pack("QpswiftInterface::settings::verbose", settings_.verbose);
+    // s.pack("QpswiftInterface::settings::scaled_termination", settings_.scaled_termination);
+    // s.pack("QpswiftInterface::settings::check_termination", settings_.check_termination);
+    // s.pack("QpswiftInterface::settings::warm_start", settings_.warm_start);
     //s.pack("QpswiftInterface::settings::time_limit", settings_.time_limit);
   }
 
