@@ -59,16 +59,28 @@ namespace casadi {
 
   const Options QpswiftInterface::options_
   = {{&Conic::options_},
-     {{"qpswift",
-       {OT_DICT,
-        "const Options to be passed to qpswift."}}
+     {{"maxit",
+       {OT_INT,
+        "Maximum iterations."}},
+      {"reltol",
+       {OT_DOUBLE,
+        "Relative tolerance."}},
+      {"abstol",
+       {OT_DOUBLE,
+        "Absolute tolerance."}},
+      {"sigma",
+       {OT_DOUBLE,
+        "Desired sigma value."}},
+      {"verbose",
+       {OT_INT,
+        "Printing level."}}
      }
   };
 
   void QpswiftInterface::init(const Dict& opts) {
     // Initialize the base classes
     Conic::init(opts);
-
+    
     maxit_ = 0;
     reltol_ = 0.;
     abstol_ = 0.;
@@ -77,27 +89,22 @@ namespace casadi {
 
     // Read options
     for (auto&& op : opts) {
-      if (op.first=="qpswift") {
-        const Dict& opts = op.second;
-        for (auto&& op : opts) {
-          if (op.first=="maxit") {
-            int temp = op.second;
-            maxit_ = static_cast<qp_int>(temp);
-          } else if (op.first=="reltol") {
-            reltol_ = op.second;
-          } else if (op.first=="abstol") {
-            abstol_ = op.second;
-          } else if (op.first=="sigma") {
-            sigma_ = op.second;
-          } else if (op.first=="verbose") {
-            int temp = op.second;
-            verbose_ = static_cast<qp_int>(temp);
-          } else {
-            casadi_error("Not recognised");
-          }
-        }
+      if (op.first=="maxit") {
+        int temp = op.second;
+        maxit_ = static_cast<qp_int>(temp);
+      } else if (op.first=="reltol") {
+        reltol_ = op.second;
+      } else if (op.first=="abstol") {
+        abstol_ = op.second;
+      } else if (op.first=="sigma") {
+        sigma_ = op.second;
+      } else if (op.first=="verbose") {
+        int temp = op.second;
+        verbose_ = static_cast<qp_int>(temp);
       }
     }
+
+    alloc_iw(na_); // casadi_trans
   }
 
   int QpswiftInterface::init_mem(void* mem) const {
@@ -121,54 +128,7 @@ namespace casadi {
     // QP var
     QP *qp_prob;
 
-    // Number of desiscion vars and constraints
-    qp_int nc = nx_;
-    qp_int mc = 2*(nx_+na_); // 2 times because we have a double inequality
-    qp_int pc = 0;
-
-    // P sparsity
-    std::vector<qp_int> Pjc_vec = vector_static_cast<qp_int>(H_.get_colind());
-    std::vector<qp_int> Pir_vec = vector_static_cast<qp_int>(H_.get_row());
-    qp_int* Pjc = Pjc_vec.data();
-    qp_int* Pir = Pir_vec.data();
-
-    // P data
-    const double *h_prob = arg[CONIC_H];
-    std::vector<qp_real> Ppr_vec = vector_static_cast<qp_real>(std::vector<double>(h_prob, h_prob+H_.nnz()));
-    qp_real* Ppr = Ppr_vec.data();
-
-    // G sparsity (is formed like [I; -I; A; -A])
-    Sparsity G_sp = Sparsity::diag(nx_, nx_);
-    G_sp.append(Sparsity::diag(nx_, nx_));
-    G_sp.append(A_);
-    G_sp.append(A_);
-
-    std::vector<qp_int> Gjc_vec = vector_static_cast<qp_int>(G_sp.get_colind());
-    std::vector<qp_int> Gir_vec = vector_static_cast<qp_int>(G_sp.get_row());
-    qp_int* Gjc = Gjc_vec.data();
-    qp_int* Gir = Gir_vec.data();
-
-    // G data
-    const double *a_prob = arg[CONIC_A];
-    std::vector<qp_real> A_data = vector_static_cast<qp_real>(std::vector<double>(a_prob, a_prob+A_.nnz()));
-    std::vector<qp_real> Gpr_vec;
-    Gpr_vec.reserve(2*(nx_ + A_.nnz()));
-    fill_n(Gpr_vec.begin(), nx_, 1);
-    fill_n(Gpr_vec.begin()+nx_, nx_, -1);
-    Gpr_vec.insert(Gpr_vec.begin()+2*nx_, A_data.begin(), A_data.end());
-    transform(Gpr_vec.begin()+2*nx_+A_.nnz(), Gpr_vec.begin()+2*(nx_+A_.nnz()), A_data.begin(), std::negate<qp_real>());
-    qp_real* Gpr = Gpr_vec.data();
-
-    // c data
-    qp_real* c = NULL;
-    if (arg[CONIC_G]) {
-      const double *g = arg[CONIC_G];
-      std::vector<qp_real> c_vec = vector_static_cast<qp_real>(std::vector<double>(g, g+nx_));
-      c = c_vec.data();
-    }
-
-    // h data
-    // TODO(@KobeBergmans): It is probably more efficient to provide an equality constraint if lbx = ubx / lba = uba
+    // Get constraints
     const double *lbx = arg[CONIC_LBX];
     const double *lba = arg[CONIC_LBA];
     const double *ubx = arg[CONIC_UBX];
@@ -177,14 +137,227 @@ namespace casadi {
     std::vector<qp_real> lba_data = vector_static_cast<qp_real>(std::vector<double>(lba, lba+na_));
     std::vector<qp_real> ubx_data = vector_static_cast<qp_real>(std::vector<double>(ubx, ubx+nx_));
     std::vector<qp_real> uba_data = vector_static_cast<qp_real>(std::vector<double>(uba, uba+na_));
-    std::vector<qp_real> h_data;
-    h_data.reserve(2*(nx_ + na_));
-    h_data.insert(h_data.begin(), ubx_data.begin(), ubx_data.end());
-    transform(h_data.begin()+nx_, h_data.begin()+2*nx_, lbx_data.begin(), std::negate<qp_real>());;
-    h_data.insert(h_data.begin()+2*nx_, uba_data.begin(), uba_data.end());
-    transform(h_data.begin()+2*nx_+na_, h_data.begin()+2*(nx_+na_), lba_data.begin(), std::negate<qp_real>());
-    qp_real* h = h_data.data();
 
+    // Check for equality constraints in A
+    // TODO(@KobeBergmans): Make this assignment more optimal.
+    std::vector<casadi_int> equality_constr_A = std::vector<casadi_int>(na_);
+    casadi_int constr_index = 0;
+    for (casadi_int i = 0; i < na_; ++i) {
+      if (lba_data[i] == uba_data[i]) equality_constr_A[constr_index++] = i;
+    }
+    equality_constr_A.resize(constr_index);
+
+    uout() << "Equality constraints in A on indices: " << equality_constr_A << std::endl;
+
+    // Check for equality constraints in x
+    // TODO(@KobeBergmans): Make this assignment more optimal.
+    std::vector<casadi_int> equality_constr_x = std::vector<casadi_int>(nx_);
+    constr_index = 0;
+    for (casadi_int i = 0; i < nx_; ++i) {
+      if (lbx_data[i] == ubx_data[i]) equality_constr_x[constr_index++] = i;
+    }
+    equality_constr_x.resize(constr_index);
+
+    uout() << "Equality constraints in x on indices: " << equality_constr_x << std::endl;
+
+    // Number of desiscion vars and constraints
+    qp_int nc = nx_;
+    qp_int mc = 2*(nx_+na_-equality_constr_A.size()-equality_constr_x.size()) ; // 2 times because we have a double inequality
+    qp_int pc = equality_constr_A.size() + equality_constr_x.size();
+
+    // P sparsity
+    std::vector<qp_int> Pjc_vec = vector_static_cast<qp_int>(H_.get_colind());
+    std::vector<qp_int> Pir_vec = vector_static_cast<qp_int>(H_.get_row());
+    qp_int* Pjc = Pjc_vec.data();
+    qp_int* Pir = Pir_vec.data();
+
+    uout() << "H/P sparsity: " << std::endl;
+    H_.spy(uout());
+
+    // P data
+    const double *h_prob = arg[CONIC_H];
+    std::vector<qp_real> Ppr_vec = vector_static_cast<qp_real>(std::vector<double>(h_prob, h_prob+H_.nnz()));
+    qp_real* Ppr = Ppr_vec.data();
+
+    uout() << "H/P data: " << Ppr_vec << std::endl;
+
+    // A Sparsity, Ax part
+    const double *a_prob = arg[CONIC_A];
+    Sparsity A_trans = A_.T(); // Get transpose because we need to copy columns
+    const casadi_int* A_trans_colind = A_trans.colind();
+    const casadi_int* A_trans_row = A_trans.row();
+    std::vector<qp_real> a_prob_trans_vec = std::vector<qp_real>(A_.nnz(), 0);
+    double* a_prob_trans = a_prob_trans_vec.data();
+    casadi_trans(a_prob, A_, a_prob_trans, A_trans, iw);
+
+    std::vector<casadi_int> new_row; 
+    std::vector<casadi_int> new_colind = std::vector<casadi_int>(equality_constr_A.size()+1, 0);
+    std::vector<qp_real> new_data = std::vector<qp_real>(equality_constr_x.size()+A_.nnz(), 1.);
+    constr_index = 0;
+    for (casadi_int i = 0; i < A_.size1(); ++i) { // Loop over all the constraints
+      if (equality_constr_A[constr_index] == i) {
+        new_row.insert(new_row.begin()+new_colind[constr_index], A_trans_row, A_trans_row + *(A_trans_colind+1) - *A_trans_colind);
+        new_data.insert(new_data.begin()+new_colind[constr_index]+equality_constr_x.size(), a_prob_trans, a_prob_trans + *(A_trans_colind+1) - *A_trans_colind);
+        new_colind[constr_index+1] = new_colind[constr_index] + *(A_trans_colind+1) - *A_trans_colind;
+        constr_index++;
+        if (constr_index == equality_constr_A.size()) break;
+      } 
+
+      A_trans_row += *(A_trans_colind+1) - *A_trans_colind;
+      a_prob_trans += *(A_trans_colind+1) - *A_trans_colind;
+      A_trans_colind++;
+    }
+    Sparsity A_sp_a_trans = Sparsity(nx_, equality_constr_A.size(), new_colind, new_row);
+
+    // A Sparsity, x part
+    Sparsity A_sp_trans = Sparsity(nx_, equality_constr_x.size());
+    for (casadi_int i = 0; i < equality_constr_x.size(); ++i) A_sp_trans.add_nz(equality_constr_x[i], i);
+
+    // A Sparsity
+    A_sp_trans.appendColumns(A_sp_a_trans);
+    Sparsity A_sp = A_sp_trans.T();
+    std::vector<qp_int> Ajc_vec = vector_static_cast<qp_int>(A_sp.get_colind());
+    std::vector<qp_int> Air_vec = vector_static_cast<qp_int>(A_sp.get_row());
+    qp_int* Ajc = Ajc_vec.data();
+    qp_int* Air = Air_vec.data();
+
+    uout() << "equality constr sparsity: " << std::endl;
+    A_sp.spy(uout());
+
+    // A Data
+    std::vector<qp_real> Apr_vec = std::vector<qp_real>(equality_constr_x.size() + A_sp.nnz(), 0);
+    casadi_trans(new_data.data(), A_sp_trans, Apr_vec.data(), A_sp, iw);
+    qp_real* Apr = Apr_vec.data();
+
+    uout() << "equality constr data: " << Apr_vec << std::endl;
+
+    // G sparsity, Ax part
+    a_prob = arg[CONIC_A];
+    A_trans_colind = A_trans.colind();
+    A_trans_row = A_trans.row();
+    a_prob_trans = a_prob_trans_vec.data();
+
+    new_colind = std::vector<casadi_int>(na_ - equality_constr_A.size()+1, 0);
+    new_row = std::vector<casadi_int>();
+    new_data = std::vector<qp_real>(2*(nx_-equality_constr_x.size() + A_.nnz()-A_sp_a_trans.nnz()), 1.);
+    fill_n(new_data.begin()+nx_-equality_constr_x.size(), nx_-equality_constr_x.size(), -1.);
+    constr_index = 0;
+    casadi_int colind_index = 0;
+    for (casadi_int i = 0; i < A_.size1(); ++i) { // Loop over all the constraints
+      if (equality_constr_A[constr_index] != i) {
+        new_row.insert(new_row.begin()+new_colind[colind_index], A_trans_row, A_trans_row + *(A_trans_colind+1) - *A_trans_colind);
+        
+        casadi_copy(a_prob_trans, *(A_trans_colind+1) - *A_trans_colind, new_data.data()+new_colind[colind_index]+2*(nx_-equality_constr_x.size()));
+        casadi_copy(a_prob_trans, *(A_trans_colind+1) - *A_trans_colind, new_data.data()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz());
+        transform(new_data.begin()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz(), new_data.begin()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz()+ *(A_trans_colind+1) - *A_trans_colind, new_data.begin()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz(), std::negate<qp_real>());
+        
+        new_colind[colind_index+1] = new_colind[colind_index] + *(A_trans_colind+1) - *A_trans_colind;
+        colind_index++;
+      } else {
+        constr_index++;
+      }
+
+      A_trans_row += *(A_trans_colind+1) - *A_trans_colind;
+      a_prob_trans += *(A_trans_colind+1) - *A_trans_colind;
+      A_trans_colind++;
+    }
+    Sparsity G_sp_g_trans = Sparsity(nx_, na_ - equality_constr_A.size(), new_colind, new_row);
+
+    // G sparsity, x part
+    Sparsity G_sp_x_trans = Sparsity(nx_, nx_ - equality_constr_x.size());
+    constr_index = 0;
+    casadi_int row_ind = 0;
+    for (casadi_int i = 0; i < nx_; ++i) {
+      if (i != equality_constr_x[constr_index]) {
+        G_sp_x_trans.add_nz(i, row_ind);
+        row_ind++;
+      } else {
+        constr_index++;
+      }
+    }
+    Sparsity G_sp_trans = Sparsity(G_sp_x_trans);
+    G_sp_trans.appendColumns(G_sp_x_trans);
+
+    // G sparsity
+    G_sp_trans.appendColumns(G_sp_g_trans);
+    G_sp_trans.appendColumns(G_sp_g_trans);
+    Sparsity G_sp = G_sp_trans.T();
+    std::vector<qp_int> Gjc_vec = vector_static_cast<qp_int>(G_sp.get_colind());
+    std::vector<qp_int> Gir_vec = vector_static_cast<qp_int>(G_sp.get_row());
+    qp_int* Gjc = Gjc_vec.data();
+    qp_int* Gir = Gir_vec.data();
+
+    uout() << "A/G sparsity: " << std::endl;
+    G_sp.spy(uout());
+
+    // G data
+    std::vector<qp_real> Gpr_vec = std::vector<qp_real>(nx_ - equality_constr_x.size() + G_sp.nnz(), 0); // Make it big enough for reuse
+    casadi_trans(new_data.data(), G_sp_trans, Gpr_vec.data(), G_sp, iw);
+    qp_real* Gpr = Gpr_vec.data();
+    uout() << "A/G data: " << Gpr_vec << std::endl;
+
+    // c data
+    qp_real* c = NULL;
+    if (arg[CONIC_G]) {
+      const double *g = arg[CONIC_G];
+      std::vector<qp_real> c_vec = vector_static_cast<qp_real>(std::vector<double>(g, g+nx_));
+      c = c_vec.data();
+
+      uout() << "g/C data: " << c_vec << std::endl;
+    }
+
+    // h Data
+    std::vector<qp_real> h_vec(2*(nx_+na_-equality_constr_x.size()-equality_constr_A.size()), 0.);
+    casadi_int h_index = 0;
+    constr_index = 0;
+    for (casadi_int i = 0; i < nx_; ++i) {
+      if (i != equality_constr_x[constr_index]) {
+        h_vec[h_index] = ubx_data[i];
+        h_vec[h_index+nx_-equality_constr_x.size()] = -lbx_data[i];
+        h_index++;
+      } else {
+        constr_index++;
+      }
+    }
+    
+    h_index = 0;
+    constr_index = 0;
+    for (casadi_int i = 0; i < na_; ++i) {
+      if (i != equality_constr_A[constr_index]) {
+        h_vec[h_index+2*(nx_-equality_constr_x.size())] = uba_data[i];
+        h_vec[h_index+2*(nx_-equality_constr_x.size())+na_-equality_constr_A.size()] = -lba_data[i];
+        h_index++;
+      } else {
+        constr_index++;
+      }
+    }
+
+    qp_real* h = h_vec.data();
+    uout() << "bnds/h data: " << h_vec << std::endl;
+
+    // b Data
+    std::vector<qp_real> b_vec(equality_constr_x.size()+equality_constr_A.size(), 0.);
+    h_index = 0;
+    constr_index = 0;
+    for (casadi_int i = 0; i < nx_; ++i) {
+      if (i == equality_constr_x[constr_index]) {
+          b_vec[h_index] = ubx_data[i];
+          h_index++;
+          constr_index++;
+      }
+    }
+
+    constr_index = 0;
+    for (casadi_int i = 0; i < na_; ++i) {
+      if (i == equality_constr_A[constr_index]) {
+          b_vec[h_index] = uba_data[i];
+          h_index++;
+          constr_index++;
+      }
+    }
+
+    qp_real* b = b_vec.data();
+    uout() << "equality bnds: " << b_vec << std::endl;
 
     // Get solver
     qp_prob = QP_SETUP(nc, mc, pc, Pjc, Pir, Ppr, null_int, null_int, null_real, Gjc, Gir, Gpr, c, h, null_real, 
@@ -199,11 +372,12 @@ namespace casadi {
 
     // Solve QP
     qp_int exit_code = QP_SOLVE(qp_prob);
-    // TODO(@KobeBergmans): Do something with the exit code
     if (exit_code == QP_OPTIMAL) {
+      uout() << "qpswift succeeded" << std::endl;
       m->success = true;
       m->unified_return_status = SOLVER_RET_SUCCESS;
     } else if (exit_code == QP_FATAL || exit_code == QP_KKTFAIL || exit_code == QP_MAXIT) {
+      uout() << "qpswift failed due to " << exit_code << std::endl;
       m->success = false;
       m->unified_return_status = SOLVER_RET_INFEASIBLE;
       return 1;
