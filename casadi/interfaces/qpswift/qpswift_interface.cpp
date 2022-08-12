@@ -165,6 +165,9 @@ namespace casadi {
     qp_int mc = 2*(nx_+na_-equality_constr_A.size()-equality_constr_x.size()) ; // 2 times because we have a double inequality
     qp_int pc = equality_constr_A.size() + equality_constr_x.size();
 
+    // TODO(@KobeBergmans): We should probably use more casadi built ins here instead of the vector operations.
+    // TODO(@KobeBergmans): We should also put the vectors in the memory object instead of vector objects for codegen
+
     // P sparsity
     std::vector<qp_int> Pjc_vec = vector_static_cast<qp_int>(H_.get_colind());
     std::vector<qp_int> Pir_vec = vector_static_cast<qp_int>(H_.get_row());
@@ -360,7 +363,7 @@ namespace casadi {
     uout() << "equality bnds: " << b_vec << std::endl;
 
     // Get solver
-    qp_prob = QP_SETUP(nc, mc, pc, Pjc, Pir, Ppr, null_int, null_int, null_real, Gjc, Gir, Gpr, c, h, null_real, 
+    qp_prob = QP_SETUP(nc, mc, pc, Pjc, Pir, Ppr, Ajc, Air, Apr, Gjc, Gir, Gpr, c, h, b, 
                     0, NULL);
 
     // Change solver settings
@@ -383,12 +386,44 @@ namespace casadi {
       return 1;
     } 
 
-    // Copy output
+    // Copy output x
     casadi_copy(qp_prob->x, nx_, res[CONIC_X]);
-    casadi_copy(qp_prob->z, nx_, res[CONIC_LAM_X]);
-    casadi_axpy(nx_, -1., qp_prob->z+nx_, res[CONIC_LAM_X]);
-    casadi_copy(qp_prob->z+2*nx_, na_, res[CONIC_LAM_A]);
-    casadi_axpy(na_, -1., qp_prob->z+2*nx_+na_, res[CONIC_LAM_A]);
+
+    // Copy output lam_x
+    double* lam_x = res[CONIC_LAM_X];
+    double* z_out = qp_prob->z;
+    double* z_out_dual = qp_prob->z + nx_ - equality_constr_x.size();
+    double* y_out = qp_prob->y;
+
+    constr_index = 0;
+    for (casadi_int i = 0; i < nx_; ++i) {
+      if (i == equality_constr_x[constr_index]) {
+        *lam_x++ = *y_out++;
+        constr_index++;
+      } else {
+        *lam_x = *z_out++;
+        *lam_x++ -= *z_out_dual++;
+      } 
+    }
+
+    // Copy output lam_a
+    double* lam_a = res[CONIC_LAM_A];
+    z_out = qp_prob->z+2*(nx_ - equality_constr_x.size());
+    z_out_dual = qp_prob->z+2*(nx_ - equality_constr_x.size())+na_-equality_constr_A.size();
+    y_out = qp_prob->y+equality_constr_x.size();
+
+    constr_index = 0;
+    for (casadi_int i = 0; i < na_; ++i) {
+      if (i == equality_constr_A[constr_index]) {
+        *lam_a++ = *y_out++;
+        constr_index++;
+      } else {
+        *lam_a = *z_out++;
+        *lam_a++ -= *z_out_dual++;
+      } 
+    }
+
+    // Copy cost
     if (res[CONIC_COST]) *res[CONIC_COST] = qp_prob->stats->fval;
 
     // Copy stats
