@@ -104,7 +104,31 @@ namespace casadi {
       }
     }
 
-    alloc_iw(na_); // casadi_trans
+    // Allocate work vectors
+    // TODO(@KobeBergmans): We need to allocate lots of space because the equality constraints size is not known...
+    alloc_w(nx_, true); // lbx
+    alloc_w(nx_, true); // ubx
+    alloc_w(na_, true); // lba
+    alloc_w(na_, true); // uba
+    alloc_w(H_.nnz(), true); // Ppr
+    alloc_w(A_.nnz(), true); // Apr
+    alloc_w(A_.nnz(), true); // Gpr
+    alloc_w(nx_, true); // c
+    alloc_w(2*(nx_+na_), true); // h
+    alloc_w(nx_+na_, true); // b
+
+    // TODO(@KobeBergmans): This is probably too much memory because qp_ints are only longs so they take 4 bytes
+    alloc_w(H_.size2()+1, true); // Pjc
+    alloc_w(H_.nnz(), true); // Pir
+    alloc_w(2*(nx_ + A_.size2()+1), true); // Gjc
+    alloc_w(2*(nx_ + A_.nnz()), true); // Gir
+    alloc_w(nx_ + A_.size2()+1, true); // Ajc
+    alloc_w(nx_ + A_.nnz(), true); // Air
+
+    alloc_w(2*(nx_+A_.nnz()), true); // new_data
+    alloc_w(A_.nnz(), true); // a_prob_trans
+
+    alloc_iw(nx_); // casadi_trans
   }
 
   int QpswiftInterface::init_mem(void* mem) const {
@@ -121,6 +145,39 @@ namespace casadi {
   solve(const double** arg, double** res, casadi_int* iw, double* w, void* mem) const {
     auto m = static_cast<QpswiftMemory*>(mem);
 
+    // Set memory locations and copy some vectors
+    double* lbx=w; w += nx_;
+    casadi_copy(arg[CONIC_LBX], nx_, lbx);
+    double* ubx=w; w += nx_;
+    casadi_copy(arg[CONIC_UBX], nx_, ubx);
+    double* lba=w; w += na_;
+    casadi_copy(arg[CONIC_LBA], na_, lba);
+    double* uba=w; w += na_;
+    casadi_copy(arg[CONIC_UBA], na_, uba);
+    double* Ppr=w; w += H_.nnz();
+    casadi_copy(arg[CONIC_H], H_.nnz(), Ppr);
+    double* Apr=w; w += A_.nnz();
+    double* Gpr=w; w += A_.nnz();
+    double* c=w; w += nx_;
+    double* h=w; w += 2*(nx_+na_);
+    double* b=w; w += nx_+na_;
+
+    qp_int* Pjc=reinterpret_cast<qp_int*>(w); w += H_.size2()+1;
+    qp_int* Pir=reinterpret_cast<qp_int*>(w); w += H_.nnz();
+    qp_int* Ajc=reinterpret_cast<qp_int*>(w); w += A_.size2()+1;
+    qp_int* Air=reinterpret_cast<qp_int*>(w); w += A_.nnz();
+    qp_int* Gjc=reinterpret_cast<qp_int*>(w); w += 2*(nx_ + A_.size2()+1);
+    qp_int* Gir=reinterpret_cast<qp_int*>(w); w += 2*(nx_ + A_.nnz());
+
+    double* new_data = w; w += 2*(nx_+A_.nnz());
+    double* a_prob_trans = w; w += A_.nnz();
+
+    uout() << "Data locations: " << std::endl;
+    uout() << "P: " << Pjc << ", " << Pir << ", " << Ppr << std::endl;
+    uout() << "A: " << Ajc << ", " << Air << ", " << Apr << std::endl;
+    uout() << "G: " << Gjc << ", " << Gir << ", " << Gpr << std::endl;
+    uout() << "c, h, b: " << c << ", " << h  << ", " << b << std::endl;
+
     // Null pointer
     qp_int *null_int = NULL;
     qp_real *null_real = NULL;
@@ -129,10 +186,6 @@ namespace casadi {
     QP *qp_prob;
 
     // Get constraints
-    const double *lbx = arg[CONIC_LBX];
-    const double *lba = arg[CONIC_LBA];
-    const double *ubx = arg[CONIC_UBX];
-    const double *uba = arg[CONIC_UBA];
     std::vector<qp_real> lbx_data = vector_static_cast<qp_real>(std::vector<double>(lbx, lbx+nx_));
     std::vector<qp_real> lba_data = vector_static_cast<qp_real>(std::vector<double>(lba, lba+na_));
     std::vector<qp_real> ubx_data = vector_static_cast<qp_real>(std::vector<double>(ubx, ubx+nx_));
@@ -171,48 +224,42 @@ namespace casadi {
     // P sparsity
     std::vector<qp_int> Pjc_vec = vector_static_cast<qp_int>(H_.get_colind());
     std::vector<qp_int> Pir_vec = vector_static_cast<qp_int>(H_.get_row());
-    qp_int* Pjc = Pjc_vec.data();
-    qp_int* Pir = Pir_vec.data();
+    casadi_copy(Pjc_vec.data(), H_.size2()+1, Pjc);
+    casadi_copy(Pir_vec.data(), H_.nnz(), Pir);
 
     uout() << "H/P sparsity: " << std::endl;
     H_.spy(uout());
 
     // P data
-    const double *h_prob = arg[CONIC_H];
-    std::vector<qp_real> Ppr_vec = vector_static_cast<qp_real>(std::vector<double>(h_prob, h_prob+H_.nnz()));
-    qp_real* Ppr = Ppr_vec.data();
-
-    uout() << "H/P data: " << Ppr_vec << std::endl;
+    uout() << "H/P data: " << std::vector<qp_real>(Ppr, Ppr+H_.nnz()) << std::endl;
 
     // A Sparsity, Ax part
     Sparsity A_trans = A_.T(); // Get transpose because we need to copy columns
     const double *a_prob = arg[CONIC_A];
     const casadi_int *A_trans_colind, *A_trans_row;
     Sparsity A_sp_a_trans;
-    std::vector<qp_real> new_data;
+    casadi_fill(new_data, 2*(nx_+A_.nnz()), 1.);
     std::vector<casadi_int> new_row, new_colind;
 
-    std::vector<qp_real> a_prob_trans_vec = std::vector<qp_real>(A_.nnz(), 0);
-    double* a_prob_trans = a_prob_trans_vec.data();
+    double* a_prob_trans_temp = a_prob_trans;
     casadi_trans(a_prob, A_, a_prob_trans, A_trans, iw);
     if (equality_constr_A.size() > 0) {
       A_trans_colind = A_trans.colind();
       A_trans_row = A_trans.row();
 
       new_colind = std::vector<casadi_int>(equality_constr_A.size()+1, 0);
-      new_data = std::vector<qp_real>(equality_constr_x.size()+A_.nnz(), 1.);
       constr_index = 0;
       for (casadi_int i = 0; i < A_.size1(); ++i) { // Loop over all the constraints
         if (equality_constr_A[constr_index] == i) {
           new_row.insert(new_row.begin()+new_colind[constr_index], A_trans_row, A_trans_row + *(A_trans_colind+1) - *A_trans_colind);
-          new_data.insert(new_data.begin()+new_colind[constr_index]+equality_constr_x.size(), a_prob_trans, a_prob_trans + *(A_trans_colind+1) - *A_trans_colind);
+          casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data+new_colind[constr_index]+equality_constr_x.size());
           new_colind[constr_index+1] = new_colind[constr_index] + *(A_trans_colind+1) - *A_trans_colind;
           constr_index++;
           if (constr_index == equality_constr_A.size()) break;
         } 
 
         A_trans_row += *(A_trans_colind+1) - *A_trans_colind;
-        a_prob_trans += *(A_trans_colind+1) - *A_trans_colind;
+        a_prob_trans_temp += *(A_trans_colind+1) - *A_trans_colind;
         A_trans_colind++;
       }
       A_sp_a_trans = Sparsity(nx_, equality_constr_A.size(), new_colind, new_row);
@@ -231,54 +278,53 @@ namespace casadi {
 
     // A Sparsity
     Sparsity A_sp;
-    qp_int *Ajc = NULL;
-    qp_int *Air = NULL;
     if (equality_constr_x.size() > 0 || equality_constr_A.size() > 0) {
       A_sp_trans.appendColumns(A_sp_a_trans);
       A_sp = A_sp_trans.T();
       std::vector<qp_int> Ajc_vec = vector_static_cast<qp_int>(A_sp.get_colind());
       std::vector<qp_int> Air_vec = vector_static_cast<qp_int>(A_sp.get_row());
-      Ajc = Ajc_vec.data();
-      Air = Air_vec.data();
+      casadi_copy(Ajc_vec.data(), A_sp.size2()+1, Ajc);
+      casadi_copy(Air_vec.data(), A_sp.nnz(), Air);
 
       uout() << "equality constr sparsity: " << std::endl;
       A_sp.spy(uout());
-    }    
-
-    // A Data
-    std::vector<qp_real> Apr_vec = std::vector<qp_real>(A_sp.nnz(), 0);
-    casadi_trans(new_data.data(), A_sp_trans, Apr_vec.data(), A_sp, iw);
-    qp_real* Apr = Apr_vec.data();
-    uout() << "equality constr data: " << Apr_vec << std::endl;
-    uout() << "Apr: " << Apr << std::endl;
-
-    if (equality_constr_A.size() == 0 && equality_constr_x.size() == 0) {
-      qp_real* Apr = NULL;
+    } else {
+      Ajc = NULL;
+      Air = NULL;
     }
 
-    uout() << "Apr: " << Apr << std::endl;
+    // A Data
+    if (equality_constr_A.size() == 0 && equality_constr_x.size() == 0) {
+      Apr = NULL;
+    } else {
+      casadi_trans(new_data, A_sp_trans, Apr, A_sp, iw);
+      uout() << "equality constr data: " << std::vector<qp_real>(Apr, Apr+A_sp.nnz()) << std::endl;
+    }
 
     // G sparsity, Ax part
     Sparsity G_sp_g_trans;
+    casadi_fill(new_data, 2*(nx_ + A_.nnz()), 1.);
+    casadi_fill(new_data+nx_-equality_constr_x.size(), nx_-equality_constr_x.size(), -1.);
+    uout() << "new_data: " << std::vector<qp_real>(new_data, new_data+2*(nx_ + A_.nnz())) << std::endl;
     if (equality_constr_A.size() != na_) {
       a_prob = arg[CONIC_A];
       A_trans_colind = A_trans.colind();
       A_trans_row = A_trans.row();
-      a_prob_trans = a_prob_trans_vec.data();
+      a_prob_trans_temp = a_prob_trans;
 
       new_colind = std::vector<casadi_int>(na_ - equality_constr_A.size()+1, 0);
       new_row = std::vector<casadi_int>();
-      new_data = std::vector<qp_real>(2*(nx_-equality_constr_x.size() + A_.nnz()-A_sp_a_trans.nnz()), 1.);
-      fill_n(new_data.begin()+nx_-equality_constr_x.size(), nx_-equality_constr_x.size(), -1.);
       constr_index = 0;
       casadi_int colind_index = 0;
       for (casadi_int i = 0; i < A_.size1(); ++i) { // Loop over all the constraints
         if (equality_constr_A.size() == 0 || equality_constr_A[constr_index] != i) {
           new_row.insert(new_row.begin()+new_colind[colind_index], A_trans_row, A_trans_row + *(A_trans_colind+1) - *A_trans_colind);
           
-          casadi_copy(a_prob_trans, *(A_trans_colind+1) - *A_trans_colind, new_data.data()+new_colind[colind_index]+2*(nx_-equality_constr_x.size()));
-          casadi_copy(a_prob_trans, *(A_trans_colind+1) - *A_trans_colind, new_data.data()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz());
-          transform(new_data.begin()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz(), new_data.begin()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz()+ *(A_trans_colind+1) - *A_trans_colind, new_data.begin()+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz(), std::negate<qp_real>());
+          casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data+new_colind[colind_index]+2*(nx_-equality_constr_x.size()));
+          // casadi_copy(a_prob_trans, *(A_trans_colind+1) - *A_trans_colind, new_data+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz());
+          // transform(new_data+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz(), new_data+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz()+ *(A_trans_colind+1) - *A_trans_colind, new_data+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz(), std::negate<qp_real>());
+          casadi_clear(new_data+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz(), *(A_trans_colind+1) - *A_trans_colind);
+          casadi_axpy(*(A_trans_colind+1) - *A_trans_colind, -1., a_prob_trans_temp, new_data+new_colind[colind_index]+2*(nx_-equality_constr_x.size())+A_.nnz()-A_sp_a_trans.nnz());
           
           new_colind[colind_index+1] = new_colind[colind_index] + *(A_trans_colind+1) - *A_trans_colind;
           colind_index++;
@@ -287,7 +333,7 @@ namespace casadi {
         }
 
         A_trans_row += *(A_trans_colind+1) - *A_trans_colind;
-        a_prob_trans += *(A_trans_colind+1) - *A_trans_colind;
+        a_prob_trans_temp += *(A_trans_colind+1) - *A_trans_colind;
         A_trans_colind++;
       }
       G_sp_g_trans = Sparsity(nx_, na_ - equality_constr_A.size(), new_colind, new_row);
@@ -316,8 +362,6 @@ namespace casadi {
     }
 
     // G sparsity
-    qp_int *Gjc = NULL;
-    qp_int *Gir = NULL;
     Sparsity G_sp;
     if (equality_constr_A.size() != na_ || equality_constr_x.size() != nx_) {
       G_sp_trans.appendColumns(G_sp_g_trans);
@@ -325,34 +369,35 @@ namespace casadi {
       G_sp = G_sp_trans.T();
       std::vector<qp_int> Gjc_vec = vector_static_cast<qp_int>(G_sp.get_colind());
       std::vector<qp_int> Gir_vec = vector_static_cast<qp_int>(G_sp.get_row());
-      Gjc = Gjc_vec.data();
-      Gir = Gir_vec.data();
+      casadi_copy(Gjc_vec.data(), G_sp.size2()+1, Gjc);
+      casadi_copy(Gir_vec.data(), G_sp.nnz(), Gir);
 
       uout() << "A/G sparsity: " << std::endl;
       G_sp.spy(uout());
+    } else {
+      Gjc = NULL;
+      Gir = NULL;
     }
     
     // G data
-    qp_real* Gpr = NULL;
     if (equality_constr_A.size() != na_ || equality_constr_x.size() != nx_) {
-      std::vector<qp_real> Gpr_vec = std::vector<qp_real>(nx_ - equality_constr_x.size() + G_sp.nnz(), 0); // Make it big enough for reuse
-      casadi_trans(new_data.data(), G_sp_trans, Gpr_vec.data(), G_sp, iw);
-      Gpr = Gpr_vec.data();
-      uout() << "A/G data: " << Gpr_vec << std::endl;
+      uout() << "new_data: " << new_data << std::vector<qp_real>(new_data, new_data+G_sp.nnz()) << std::endl;
+      uout() << "Gpr: " << Gpr << std::endl;
+      casadi_trans(new_data, G_sp_trans, Gpr, G_sp, iw);
+      uout() << "A/G data: " << std::vector<qp_real>(Gpr, Gpr+G_sp.nnz()) << std::endl;
+    } else {
+      Gpr = NULL;
     }
 
     // c data
-    qp_real* c = NULL;
     if (arg[CONIC_G]) {
-      const double *g = arg[CONIC_G];
-      std::vector<qp_real> c_vec = vector_static_cast<qp_real>(std::vector<double>(g, g+nx_));
-      c = c_vec.data();
-
-      uout() << "g/C data: " << c_vec << std::endl;
+      casadi_copy(arg[CONIC_G], nx_, c);
+      uout() << "g/C data: " << std::vector<qp_real>(c, c+nx_) << std::endl;
+    } else {
+      c = NULL;
     }
 
     // h Data
-    qp_real* h = NULL;
     if (equality_constr_A.size() != na_ || equality_constr_x.size() != nx_) {
       std::vector<qp_real> h_vec(2*(nx_+na_-equality_constr_x.size()-equality_constr_A.size()), 0.);
       casadi_int h_index = 0;
@@ -379,12 +424,13 @@ namespace casadi {
         }
       }
 
-      h = h_vec.data();
+      casadi_copy(h_vec.data(), 2*(nx_+na_-equality_constr_x.size()-equality_constr_A.size()), h);
       uout() << "bnds/h data: " << h_vec << std::endl;
+    } else {
+      h = NULL;
     }
 
     // b Data
-    qp_real* b = NULL;
     if (equality_constr_A.size() > 0 || equality_constr_x.size() > 0) {
       std::vector<qp_real> b_vec(equality_constr_x.size()+equality_constr_A.size(), 0.);
       casadi_int h_index = 0;
@@ -410,8 +456,10 @@ namespace casadi {
         }
       }
     
-      b = b_vec.data();
+      casadi_copy(b_vec.data(), equality_constr_x.size()+equality_constr_A.size(), b);
       uout() << "equality bnds: " << b_vec << std::endl;
+    } else {
+      b = NULL;
     }
 
     // Get solver
@@ -444,8 +492,12 @@ namespace casadi {
       return 1;
     } 
 
+    uout() << "Copying x" << std::endl;
+
     // Copy output x
     casadi_copy(qp_prob->x, nx_, res[CONIC_X]);
+
+    uout() << "Copying lam_x" << std::endl;
 
     // Copy output lam_x
     double* lam_x = res[CONIC_LAM_X];
@@ -455,7 +507,7 @@ namespace casadi {
 
     constr_index = 0;
     for (casadi_int i = 0; i < nx_; ++i) {
-      if (i == equality_constr_x[constr_index]) {
+      if (equality_constr_x.size() > 0 && i == equality_constr_x[constr_index]) {
         *lam_x++ = *y_out++;
         constr_index++;
       } else {
@@ -463,6 +515,8 @@ namespace casadi {
         *lam_x++ -= *z_out_dual++;
       } 
     }
+    
+    uout() << "Copying lam_a" << std::endl;
 
     // Copy output lam_a
     double* lam_a = res[CONIC_LAM_A];
@@ -472,7 +526,7 @@ namespace casadi {
 
     constr_index = 0;
     for (casadi_int i = 0; i < na_; ++i) {
-      if (i == equality_constr_A[constr_index]) {
+      if (equality_constr_A.size() > 0 && i == equality_constr_A[constr_index]) {
         *lam_a++ = *y_out++;
         constr_index++;
       } else {
@@ -480,6 +534,8 @@ namespace casadi {
         *lam_a++ -= *z_out_dual++;
       } 
     }
+
+    uout() << "Copying cost" << std::endl;
 
     // Copy cost
     if (res[CONIC_COST]) *res[CONIC_COST] = qp_prob->stats->fval;
@@ -490,6 +546,8 @@ namespace casadi {
     m->kkt_time = qp_prob->stats->kkt_time;
     m->ldl_numeric = qp_prob->stats->ldl_numeric;
     m->iter_count = static_cast<int>(qp_prob->stats->IterationCount);
+
+    uout() << "Entering cleanup" << std::endl;
 
     // Cleanup
     QP_CLEANUP(qp_prob);
