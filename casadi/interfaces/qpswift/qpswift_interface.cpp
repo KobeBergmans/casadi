@@ -128,7 +128,7 @@ namespace casadi {
     alloc_w(2*(nx_+A_.nnz()), true); // new_data
     alloc_w(A_.nnz(), true); // a_prob_trans
 
-    alloc_iw(nx_); // casadi_trans
+    alloc_iw(2*(na_+nx_)); // casadi_trans
   }
 
   int QpswiftInterface::init_mem(void* mem) const {
@@ -161,6 +161,8 @@ namespace casadi {
     double* c=w; w += nx_;
     double* h=w; w += 2*(nx_+na_);
     double* b=w; w += nx_+na_;
+    double* new_data = w; w += 2*(nx_+A_.nnz());
+    double* a_prob_trans = w; w += A_.nnz();
 
     qp_int* Pjc=reinterpret_cast<qp_int*>(w); w += H_.size2()+1;
     qp_int* Pir=reinterpret_cast<qp_int*>(w); w += H_.nnz();
@@ -169,14 +171,16 @@ namespace casadi {
     qp_int* Gjc=reinterpret_cast<qp_int*>(w); w += 2*(nx_ + A_.size2()+1);
     qp_int* Gir=reinterpret_cast<qp_int*>(w); w += 2*(nx_ + A_.nnz());
 
-    double* new_data = w; w += 2*(nx_+A_.nnz());
-    double* a_prob_trans = w; w += A_.nnz();
-
     uout() << "Data locations: " << std::endl;
+    uout() << "lbx, ubx: " << lbx << ", " << ubx << std::endl;
+    uout() << "lba, uba: " << lba << ", " << uba << std::endl;
     uout() << "P: " << Pjc << ", " << Pir << ", " << Ppr << std::endl;
     uout() << "A: " << Ajc << ", " << Air << ", " << Apr << std::endl;
     uout() << "G: " << Gjc << ", " << Gir << ", " << Gpr << std::endl;
     uout() << "c, h, b: " << c << ", " << h  << ", " << b << std::endl;
+    uout() << "new_data: " << new_data << std::endl;
+    uout() << "a_prob_trans: " << a_prob_trans << std::endl;
+    uout() << "iw: " << iw << std::endl;
 
     // Null pointer
     qp_int *null_int = NULL;
