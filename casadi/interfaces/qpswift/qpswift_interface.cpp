@@ -258,8 +258,9 @@ namespace casadi {
     constr_index_3 = 0;
     constr_index_4 = 0;
     for (casadi_int i = 0; i < nx_; ++i) {
-      if (lbx_data[i] == ubx_data[i]) equality_constr_x[constr_index_1++] = i;
-      if (lbx_data[i] == -inf && ubx_data[i] == inf) {
+      if (lbx_data[i] == ubx_data[i]) {
+        equality_constr_x[constr_index_1++] = i;
+      } else if (lbx_data[i] == -inf && ubx_data[i] == inf) {
         unbounded_constr_x[constr_index_2++] = i;
       } else if (lbx_data[i] == -inf) {
         unbounded_lower_constr_x[constr_index_3++] = i;
@@ -736,33 +737,56 @@ namespace casadi {
     // Copy output lam_x
     double* lam_x = res[CONIC_LAM_X];
     double* z_out = qp_prob->z;
-    double* z_out_dual = qp_prob->z + nx_ - eq_c_x - un_c_x;
+    double* z_out_dual = qp_prob->z +nx_-eq_c_x-un_c_x-un_u_c_x;
     double* y_out = qp_prob->y;
 
     constr_index_1 = 0;
+    constr_index_2 = 0;
+    constr_index_3 = 0;
+    constr_index_4 = 0;
     for (casadi_int i = 0; i < nx_; ++i) {
       if (eq_c_x > 0 && i == equality_constr_x[constr_index_1]) {
         *lam_x++ = *y_out++;
         constr_index_1++;
+      } else if (un_c_x > 0 && i == unbounded_constr_x[constr_index_2]) {
+        *lam_x++ = 0;
+        constr_index_2++;
+      } else if (un_u_c_x > 0 && i == unbounded_upper_constr_x[constr_index_3]) {
+        *lam_x++ = -*z_out_dual++;
+        constr_index_3++;
+      } else if (un_l_c_x > 0 && i == unbounded_lower_constr_x[constr_index_4]) {
+        *lam_x++ = *z_out++;
+        constr_index_4++;
       } else {
         *lam_x = *z_out++;
         *lam_x++ -= *z_out_dual++;
-      } 
+      }
     }
     
     uout() << "Copying lam_a" << std::endl;
 
     // Copy output lam_a
     double* lam_a = res[CONIC_LAM_A];
-    z_out = qp_prob->z+2*(nx_ - eq_c_x - un_c_x);
-    z_out_dual = qp_prob->z+2*(nx_ - eq_c_x-un_c_x)+na_-eq_c_A-un_c_A;
-    y_out = qp_prob->y+eq_c_x;
+    z_out = z_out_dual;
+    z_out_dual = z_out+na_-eq_c_A-un_c_A-un_u_c_A;
 
     constr_index_1 = 0;
+    constr_index_2 = 0;
+    constr_index_3 = 0;
+    constr_index_4 = 0;
     for (casadi_int i = 0; i < na_; ++i) {
       if (eq_c_A > 0 && i == equality_constr_A[constr_index_1]) {
         *lam_a++ = *y_out++;
         constr_index_1++;
+      } else if (un_c_A > 0 && i == unbounded_constr_A[constr_index_2]) {
+        *lam_a++ = 0;
+        constr_index_2++;
+      } else if (un_u_c_A > 0 && i == unbounded_upper_constr_A[constr_index_3]) {
+        *lam_a++ = -*z_out_dual++;
+        constr_index_3++;
+      } else if (un_l_c_A > 0 && i == unbounded_lower_constr_A[constr_index_4]) {
+        *lam_a++ = *z_out++;
+        constr_index_4++;
       } else {
         *lam_a = *z_out++;
         *lam_a++ -= *z_out_dual++;
