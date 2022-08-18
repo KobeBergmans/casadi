@@ -182,26 +182,28 @@ namespace casadi {
     double* new_data_gA_upper = w; w += A_.nnz();
     double* new_data_gA_lower = w; w += A_.nnz();
     
-    casadi_int* equality_constr_A = reinterpret_cast<casadi_int*>(w); w += na_;
-    casadi_int* unbounded_lower_constr_A = reinterpret_cast<casadi_int*>(w); w += na_;
-    casadi_int* unbounded_upper_constr_A = reinterpret_cast<casadi_int*>(w); w += na_;
-    casadi_int* equality_constr_x = reinterpret_cast<casadi_int*>(w); w += nx_;
-    casadi_int* unbounded_lower_constr_x = reinterpret_cast<casadi_int*>(w); w += nx_;
-    casadi_int* unbounded_upper_constr_x = reinterpret_cast<casadi_int*>(w); w += nx_;
+    casadi_int* w_ci = reinterpret_cast<casadi_int*>(w);
+    casadi_int* equality_constr_A = w_ci; w_ci += na_;
+    casadi_int* unbounded_lower_constr_A = w_ci; w_ci += na_;
+    casadi_int* unbounded_upper_constr_A = w_ci; w_ci += na_;
+    casadi_int* equality_constr_x = w_ci; w_ci += nx_;
+    casadi_int* unbounded_lower_constr_x = w_ci; w_ci += nx_;
+    casadi_int* unbounded_upper_constr_x = w_ci; w_ci += nx_;
 
-    casadi_int* new_colind_1 = reinterpret_cast<casadi_int*>(w); w += na_+1;
-    casadi_int* new_colind_2 = reinterpret_cast<casadi_int*>(w); w += na_+1;
-    casadi_int* new_colind_3 = reinterpret_cast<casadi_int*>(w); w += na_+1;
-    casadi_int* new_row_1 = reinterpret_cast<casadi_int*>(w); w += A_.nnz();
-    casadi_int* new_row_2 = reinterpret_cast<casadi_int*>(w); w += A_.nnz();
-    casadi_int* new_row_3 = reinterpret_cast<casadi_int*>(w); w += A_.nnz();
+    casadi_int* new_colind_1 = w_ci; w_ci += na_+1;
+    casadi_int* new_colind_2 = w_ci; w_ci += na_+1;
+    casadi_int* new_colind_3 = w_ci; w_ci += na_+1;
+    casadi_int* new_row_1 = w_ci; w_ci += A_.nnz();
+    casadi_int* new_row_2 = w_ci; w_ci += A_.nnz();
+    casadi_int* new_row_3 = w_ci; w_ci += A_.nnz();
 
-    qp_int* Pjc=reinterpret_cast<qp_int*>(w); w += H_.size2()+1;
-    qp_int* Pir=reinterpret_cast<qp_int*>(w); w += H_.nnz();
-    qp_int* Ajc=reinterpret_cast<qp_int*>(w); w += A_.size2()+1;
-    qp_int* Air=reinterpret_cast<qp_int*>(w); w += A_.nnz();
-    qp_int* Gjc=reinterpret_cast<qp_int*>(w); w += 2*(nx_ + A_.size2()+1);
-    qp_int* Gir=reinterpret_cast<qp_int*>(w); w += 2*(nx_ + A_.nnz());
+    qp_int* w_qp = reinterpret_cast<qp_int*>(w_ci);
+    qp_int* Pjc = w_qp; w_qp += H_.size2()+1;
+    qp_int* Pir = w_qp; w_qp += H_.nnz();
+    qp_int* Ajc = w_qp; w_qp += A_.size2()+1;
+    qp_int* Air = w_qp; w_qp += A_.nnz();
+    qp_int* Gjc = w_qp; w_qp += 2*(nx_ + A_.size2()+1);
+    qp_int* Gir = w_qp; w_qp += 2*(nx_ + A_.nnz());
 
     uout() << "Data locations: " << std::endl;
     uout() << "lbx, ubx: " << lbx << ", " << ubx << std::endl;
@@ -220,8 +222,8 @@ namespace casadi {
     uout() << "lba: " << std::vector<double>(lba, lba+na_) << std::endl;
     uout() << "uba: " << std::vector<double>(uba, uba+na_) << std::endl;
 
-    // Constraint indices
-    casadi_int constr_index_1, constr_index_2, constr_index_3;
+    // indices
+    casadi_int index_1, index_2, index_3;
 
     // QP var
     QP *qp_prob;
@@ -233,61 +235,61 @@ namespace casadi {
     casadi_int un_c_A = 0;
     casadi_int un_l_c_A = 0;
     casadi_int un_u_c_A = 0;
-    constr_index_1 = 0;
-    constr_index_2 = 0;
-    constr_index_3 = 0;
+    index_1 = 0;
+    index_2 = 0;
+    index_3 = 0;
     for (casadi_int i = 0; i < na_; ++i) {
       if (lba[i] == uba[i]) {
-        equality_constr_A[constr_index_1++] = i;
+        equality_constr_A[index_1++] = i;
       } else if (lba[i] == -inf && uba[i] == inf) {
         un_c_A++;
-        unbounded_lower_constr_A[constr_index_2++] = i;
-        unbounded_upper_constr_A[constr_index_3++] = i;
+        unbounded_lower_constr_A[index_2++] = i;
+        unbounded_upper_constr_A[index_3++] = i;
       } else if (lba[i] == -inf) {
         un_l_c_A++;
-        unbounded_lower_constr_A[constr_index_2++] = i;
+        unbounded_lower_constr_A[index_2++] = i;
       } else if (uba[i] == inf) {
         un_u_c_A++;
-        unbounded_upper_constr_A[constr_index_3++] = i;
+        unbounded_upper_constr_A[index_3++] = i;
       } 
     }
 
-    uout() << "Equality constraints in A: " << std::vector<casadi_int>(equality_constr_A, equality_constr_A+constr_index_1) << std::endl;
-    uout() << "Unbounded lower A constraints: " << std::vector<casadi_int>(unbounded_lower_constr_A, unbounded_lower_constr_A+constr_index_2) << std::endl;
-    uout() << "Unbounded upper A constraints: " << std::vector<casadi_int>(unbounded_upper_constr_A, unbounded_upper_constr_A+constr_index_3) << std::endl;
+    uout() << "Equality constraints in A: " << std::vector<casadi_int>(equality_constr_A, equality_constr_A+index_1) << std::endl;
+    uout() << "Unbounded lower A constraints: " << std::vector<casadi_int>(unbounded_lower_constr_A, unbounded_lower_constr_A+index_2) << std::endl;
+    uout() << "Unbounded upper A constraints: " << std::vector<casadi_int>(unbounded_upper_constr_A, unbounded_upper_constr_A+index_3) << std::endl;
 
     // Define vars for readability
-    casadi_int eq_c_A = constr_index_1;
+    casadi_int eq_c_A = index_1;
 
     // Check x constraints
     casadi_int un_c_x = 0;
     casadi_int un_l_c_x = 0;
     casadi_int un_u_c_x = 0;
-    constr_index_1 = 0;
-    constr_index_2 = 0;
-    constr_index_3 = 0;
+    index_1 = 0;
+    index_2 = 0;
+    index_3 = 0;
     for (casadi_int i = 0; i < nx_; ++i) {
       if (lbx[i] == ubx[i]) {
-        equality_constr_x[constr_index_1++] = i;
+        equality_constr_x[index_1++] = i;
       } else if (lbx[i] == -inf && ubx[i] == inf) {
         un_c_x++;
-        unbounded_lower_constr_x[constr_index_2++] = i;
-        unbounded_upper_constr_x[constr_index_3++] = i;
+        unbounded_lower_constr_x[index_2++] = i;
+        unbounded_upper_constr_x[index_3++] = i;
       } else if (lbx[i] == -inf) {
         un_l_c_x++;
-        unbounded_lower_constr_x[constr_index_2++] = i;
+        unbounded_lower_constr_x[index_2++] = i;
       } else if (ubx[i] == inf) {
         un_u_c_x++;
-        unbounded_upper_constr_x[constr_index_3++] = i;
+        unbounded_upper_constr_x[index_3++] = i;
       }
     }
 
-    uout() << "Equality constraints in x: " << std::vector<casadi_int>(equality_constr_x, equality_constr_x+constr_index_1) << std::endl;
-    uout() << "Unbounded lower x constraints: " << std::vector<casadi_int>(unbounded_lower_constr_x, unbounded_lower_constr_x+constr_index_2) << std::endl;
-    uout() << "Unbounded upper x constraints: " << std::vector<casadi_int>(unbounded_upper_constr_x, unbounded_upper_constr_x+constr_index_3) << std::endl;
+    uout() << "Equality constraints in x: " << std::vector<casadi_int>(equality_constr_x, equality_constr_x+index_1) << std::endl;
+    uout() << "Unbounded lower x constraints: " << std::vector<casadi_int>(unbounded_lower_constr_x, unbounded_lower_constr_x+index_2) << std::endl;
+    uout() << "Unbounded upper x constraints: " << std::vector<casadi_int>(unbounded_upper_constr_x, unbounded_upper_constr_x+index_3) << std::endl;
 
     // Define vars for readability
-    casadi_int eq_c_x = constr_index_1;
+    casadi_int eq_c_x = index_1;
 
     // Error if there are only equality constraints
     if (eq_c_x + un_c_x == nx_ && eq_c_A + un_c_A == na_) {
@@ -324,15 +326,15 @@ namespace casadi {
       A_trans_colind = A_trans.colind();
       A_trans_row = A_trans.row();
 
-      casadi_fill(new_colind_1, na_+1, c_zero);
-      constr_index_1 = 0;
+      new_colind_1[0] = 0;
+      index_1 = 0;
       for (casadi_int i = 0; i < A_.size1(); ++i) { // Loop over all the constraints
-        if (equality_constr_A[constr_index_1] == i) {
-          casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_1+new_colind_1[constr_index_1]);
-          casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data+new_colind_1[constr_index_1]+eq_c_x);
-          new_colind_1[constr_index_1+1] = new_colind_1[constr_index_1] + *(A_trans_colind+1) - *A_trans_colind;
-          constr_index_1++;
-          if (constr_index_1 == eq_c_A) break;
+        if (equality_constr_A[index_1] == i) {
+          casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_1+new_colind_1[index_1]);
+          casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data+new_colind_1[index_1]+eq_c_x);
+          new_colind_1[index_1+1] = new_colind_1[index_1] + *(A_trans_colind+1) - *A_trans_colind;
+          index_1++;
+          if (index_1 == eq_c_A) break;
         } 
 
         A_trans_row += *(A_trans_colind+1) - *A_trans_colind;
@@ -386,22 +388,22 @@ namespace casadi {
       A_trans_row = A_trans.row();
       a_prob_trans_temp = a_prob_trans;
 
-      casadi_fill(new_colind_2, na_+1, c_zero);
-      constr_index_1 = 0;
-      constr_index_2 = 0;
-      casadi_int colind_index = 0;
+      new_colind_2[0] = 0;
+      index_1 = 0;
+      index_2 = 0;
+      index_3 = 0;
       for (casadi_int i = 0; i < A_.size1(); ++i) { // Loop over all the constraints
-        if (eq_c_A == 0 || equality_constr_A[constr_index_1] != i) {
-          if ((un_c_A == 0 && un_u_c_A == 0) || unbounded_upper_constr_A[constr_index_2] != i) {
-            casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_2+new_colind_2[colind_index]);
-            casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data_gA_upper+new_colind_2[colind_index]);
-            new_colind_2[colind_index+1] = new_colind_2[colind_index] + *(A_trans_colind+1) - *A_trans_colind;
-            colind_index++;
+        if (eq_c_A == 0 || equality_constr_A[index_1] != i) {
+          if ((un_c_A == 0 && un_u_c_A == 0) || unbounded_upper_constr_A[index_2] != i) {
+            casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_2+new_colind_2[index_3]);
+            casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data_gA_upper+new_colind_2[index_3]);
+            new_colind_2[index_3+1] = new_colind_2[index_3] + *(A_trans_colind+1) - *A_trans_colind;
+            index_3++;
           } else {
-            constr_index_2++;
+            index_2++;
           }  
         } else {
-          constr_index_1++;
+          index_1++;
         }
 
         A_trans_row += *(A_trans_colind+1) - *A_trans_colind;
@@ -421,22 +423,22 @@ namespace casadi {
       A_trans_row = A_trans.row();
       a_prob_trans_temp = a_prob_trans;
 
-      casadi_fill(new_colind_3, na_+1, c_zero);
-      constr_index_1 = 0;
-      constr_index_2 = 0;
-      casadi_int colind_index = 0;
+      new_colind_3[0] = 0;
+      index_1 = 0;
+      index_2 = 0;
+      index_3 = 0;
       for (casadi_int i = 0; i < A_.size1(); ++i) { // Loop over all the constraints
-        if (eq_c_A == 0 || equality_constr_A[constr_index_1] != i) {
-          if ((un_c_A == 0 && un_l_c_A == 0) || unbounded_lower_constr_A[constr_index_2] != i) {
-            casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_3+new_colind_3[colind_index]);
-            casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data_gA_lower+new_colind_3[colind_index]);
-            new_colind_3[colind_index+1] = new_colind_3[colind_index] + *(A_trans_colind+1) - *A_trans_colind;
-            colind_index++;
+        if (eq_c_A == 0 || equality_constr_A[index_1] != i) {
+          if ((un_c_A == 0 && un_l_c_A == 0) || unbounded_lower_constr_A[index_2] != i) {
+            casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_3+new_colind_3[index_3]);
+            casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data_gA_lower+new_colind_3[index_3]);
+            new_colind_3[index_3+1] = new_colind_3[index_3] + *(A_trans_colind+1) - *A_trans_colind;
+            index_3++;
           } else {
-            constr_index_2++;
+            index_2++;
           }        
         } else {
-          constr_index_1++;
+          index_1++;
         }
 
         A_trans_row += *(A_trans_colind+1) - *A_trans_colind;
@@ -452,19 +454,19 @@ namespace casadi {
     Sparsity G_sp_trans_upper;
     if (eq_c_x+un_c_x+un_u_c_x != nx_) {
       Sparsity G_sp_x_trans = Sparsity(nx_, nx_-eq_c_x-un_c_x-un_u_c_x);
-      constr_index_1 = 0;
-      constr_index_2 = 0;
-      casadi_int row_ind = 0;
+      index_1 = 0;
+      index_2 = 0;
+      index_3 = 0;
       for (casadi_int i = 0; i < nx_; ++i) {
-        if (eq_c_x == 0 || i != equality_constr_x[constr_index_1]) {
-          if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[constr_index_2]) {
-            G_sp_x_trans.add_nz(i, row_ind);
-            row_ind++;
+        if (eq_c_x == 0 || i != equality_constr_x[index_1]) {
+          if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[index_2]) {
+            G_sp_x_trans.add_nz(i, index_3);
+            index_3++;
           } else {
-            constr_index_2++;
+            index_2++;
           }
         } else {
-          constr_index_1++;
+          index_1++;
         }
       }
       G_sp_trans_upper = Sparsity(G_sp_x_trans);
@@ -476,19 +478,19 @@ namespace casadi {
     Sparsity G_sp_trans_lower;
     if (eq_c_x+un_c_x+un_l_c_x != nx_) {
       Sparsity G_sp_x_trans = Sparsity(nx_, nx_-eq_c_x-un_c_x-un_l_c_x);
-      constr_index_1 = 0;
-      constr_index_2 = 0;
-      casadi_int row_ind = 0;
+      index_1 = 0;
+      index_2 = 0;
+      index_3 = 0;
       for (casadi_int i = 0; i < nx_; ++i) {
-        if (eq_c_x == 0 || i != equality_constr_x[constr_index_1]) {
-          if ((un_c_x == 0 && un_l_c_x == 0) || i != unbounded_lower_constr_x[constr_index_2]) {
-            G_sp_x_trans.add_nz(i, row_ind);
-            row_ind++;
+        if (eq_c_x == 0 || i != equality_constr_x[index_1]) {
+          if ((un_c_x == 0 && un_l_c_x == 0) || i != unbounded_lower_constr_x[index_2]) {
+            G_sp_x_trans.add_nz(i, index_3);
+            index_3++;
           } else {
-            constr_index_2++;
+            index_2++;
           }
         } else {
-          constr_index_1++;
+          index_1++;
         }
       }
       G_sp_trans_lower = Sparsity(G_sp_x_trans);
@@ -545,66 +547,66 @@ namespace casadi {
       casadi_int h_index = 0;
       
       // x upper part
-      constr_index_1 = 0;
-      constr_index_2 = 0;
+      index_1 = 0;
+      index_2 = 0;
       for (casadi_int i = 0; i < nx_; ++i) {
-        if (eq_c_x == 0 || i != equality_constr_x[constr_index_1]) {
-          if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[constr_index_2]) {
+        if (eq_c_x == 0 || i != equality_constr_x[index_1]) {
+          if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[index_2]) {
             h[h_index] = ubx[i];
             h_index++;
           } else {
-            constr_index_2++;
+            index_2++;
           }
         } else {
-          constr_index_1++;
+          index_1++;
         }
       }
 
       // x lower part
-      constr_index_1 = 0;
-      constr_index_2 = 0;
+      index_1 = 0;
+      index_2 = 0;
       for (casadi_int i = 0; i < nx_; ++i) {
-        if (eq_c_x == 0 || i != equality_constr_x[constr_index_1]) {
-          if ((un_c_x == 0 && un_l_c_x == 0) || i != unbounded_lower_constr_x[constr_index_2]) {
+        if (eq_c_x == 0 || i != equality_constr_x[index_1]) {
+          if ((un_c_x == 0 && un_l_c_x == 0) || i != unbounded_lower_constr_x[index_2]) {
             h[h_index] = -lbx[i];
             h_index++;
           } else {
-            constr_index_2++;
+            index_2++;
           }
         } else {
-          constr_index_1++;
+          index_1++;
         }
       }
       
       // A upper part
-      constr_index_1 = 0;
-      constr_index_2 = 0;
+      index_1 = 0;
+      index_2 = 0;
       for (casadi_int i = 0; i < na_; ++i) {
-        if (eq_c_A == 0 || i != equality_constr_A[constr_index_1]) {
-          if ((un_c_A == 0 && un_u_c_A == 0) || i != unbounded_upper_constr_A[constr_index_2]) {
+        if (eq_c_A == 0 || i != equality_constr_A[index_1]) {
+          if ((un_c_A == 0 && un_u_c_A == 0) || i != unbounded_upper_constr_A[index_2]) {
             h[h_index] = uba[i];
             h_index++;
           } else {
-            constr_index_2++;
+            index_2++;
           }
         } else {
-          constr_index_1++;
+          index_1++;
         }
       }
 
       // A lower part
-      constr_index_1 = 0;
-      constr_index_2 = 0;
+      index_1 = 0;
+      index_2 = 0;
       for (casadi_int i = 0; i < na_; ++i) {
-        if (eq_c_A == 0 || i != equality_constr_A[constr_index_1]) {
-          if ((un_c_A == 0 && un_l_c_A == 0) || i != unbounded_lower_constr_A[constr_index_2]) {
+        if (eq_c_A == 0 || i != equality_constr_A[index_1]) {
+          if ((un_c_A == 0 && un_l_c_A == 0) || i != unbounded_lower_constr_A[index_2]) {
             h[h_index] = -lba[i];
             h_index++;
           } else {
-            constr_index_2++;
+            index_2++;
           }
         } else {
-          constr_index_1++;
+          index_1++;
         }
       }
 
@@ -617,23 +619,23 @@ namespace casadi {
     if (eq_c_A > 0 || eq_c_x > 0) {
       casadi_int b_index = 0;
       if (eq_c_x > 0) {
-        constr_index_1 = 0;
+        index_1 = 0;
         for (casadi_int i = 0; i < nx_; ++i) {
-          if (i == equality_constr_x[constr_index_1]) {
+          if (i == equality_constr_x[index_1]) {
               b[b_index] = ubx[i];
               b_index++;
-              constr_index_1++;
+              index_1++;
           }
         }
       }
       
       if (eq_c_A > 0) {
-        constr_index_1 = 0;
+        index_1 = 0;
         for (casadi_int i = 0; i < na_; ++i) {
-          if (i == equality_constr_A[constr_index_1]) {
+          if (i == equality_constr_A[index_1]) {
               b[b_index] = uba[i];
               b_index++;
-              constr_index_1++;
+              index_1++;
           }
         }
       }
@@ -686,24 +688,24 @@ namespace casadi {
     double* z_out_dual = qp_prob->z +nx_-eq_c_x-un_c_x-un_u_c_x;
     double* y_out = qp_prob->y;
 
-    constr_index_1 = 0;
-    constr_index_2 = 0;
-    constr_index_3 = 0;
+    index_1 = 0;
+    index_2 = 0;
+    index_3 = 0;
     for (casadi_int i = 0; i < nx_; ++i) {
-      if (eq_c_x > 0 && i == equality_constr_x[constr_index_1]) {
+      if (eq_c_x > 0 && i == equality_constr_x[index_1]) {
         *lam_x++ = *y_out++;
-        constr_index_1++;
+        index_1++;
       } else {
         *lam_x = 0;
-        if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[constr_index_2]) {
+        if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[index_2]) {
           *lam_x += *z_out++;
         } else {
-          constr_index_2++;
+          index_2++;
         }
-        if ((un_c_x == 0 && un_l_c_x == 0) || i != unbounded_lower_constr_x[constr_index_3]) {
+        if ((un_c_x == 0 && un_l_c_x == 0) || i != unbounded_lower_constr_x[index_3]) {
           *lam_x -= *z_out_dual++;
         } else {
-          constr_index_3++;
+          index_3++;
         }
         lam_x++;
       }
@@ -716,24 +718,24 @@ namespace casadi {
     z_out = z_out_dual;
     z_out_dual = z_out+na_-eq_c_A-un_c_A-un_u_c_A;
 
-    constr_index_1 = 0;
-    constr_index_2 = 0;
-    constr_index_3 = 0;
+    index_1 = 0;
+    index_2 = 0;
+    index_3 = 0;
     for (casadi_int i = 0; i < na_; ++i) {
-      if (eq_c_A > 0 && i == equality_constr_A[constr_index_1]) {
+      if (eq_c_A > 0 && i == equality_constr_A[index_1]) {
         *lam_a++ = *y_out++;
-        constr_index_1++;
+        index_1++;
       } else {
         *lam_a = 0;
-        if ((un_c_A == 0 && un_u_c_A == 0) || i != unbounded_upper_constr_A[constr_index_2]) {
+        if ((un_c_A == 0 && un_u_c_A == 0) || i != unbounded_upper_constr_A[index_2]) {
           *lam_a += *z_out++;
         } else {
-          constr_index_2++;
+          index_2++;
         }
-        if ((un_c_A == 0 && un_l_c_A == 0) || i != unbounded_lower_constr_A[constr_index_3]) {
+        if ((un_c_A == 0 && un_l_c_A == 0) || i != unbounded_lower_constr_A[index_3]) {
           *lam_a -= *z_out_dual++;
         } else {
-          constr_index_3++;
+          index_3++;
         } 
         lam_a++;
       }
