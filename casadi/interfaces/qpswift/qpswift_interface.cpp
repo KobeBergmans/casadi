@@ -116,6 +116,11 @@ namespace casadi {
     alloc_w(nx_, true); // c
     alloc_w(2*(nx_+na_), true); // h
     alloc_w(nx_+na_, true); // b
+    
+    alloc_w(2*(nx_+A_.nnz()), true); // new_data
+    alloc_w(A_.nnz(), true); // a_prob_trans
+    alloc_w(A_.nnz(), true); // new_data_gA_upper
+    alloc_w(A_.nnz(), true); // new_data_gA_lower
 
     // TODO(@KobeBergmans): This is probably too much memory because qp_ints are only longs so they take 4 bytes
     alloc_w(H_.size2()+1, true); // Pjc
@@ -124,14 +129,6 @@ namespace casadi {
     alloc_w(2*(nx_ + A_.nnz()), true); // Gir
     alloc_w(nx_ + A_.size2()+1, true); // Ajc
     alloc_w(nx_ + A_.nnz(), true); // Air
-
-    alloc_w(2*(nx_+A_.nnz()), true); // new_data
-    alloc_w(A_.nnz(), true); // a_prob_trans
-
-    alloc_w(A_.nnz(), true); // new_data_gA_upper
-    alloc_w(A_.nnz(), true); // new_data_gA_lower
-    alloc_w(nx_, true); // new_data_gx_upper
-    alloc_w(nx_, true); // new_data_gx_lower
 
     alloc_iw(2*(na_+nx_)); // casadi_trans
   }
@@ -170,8 +167,6 @@ namespace casadi {
     double* a_prob_trans = w; w += A_.nnz();
     double* new_data_gA_upper = w; w += A_.nnz();
     double* new_data_gA_lower = w; w += A_.nnz();
-    double* new_data_gx_upper = w; w += nx_;
-    double* new_data_gx_lower = w; w += nx_;
 
     qp_int* Pjc=reinterpret_cast<qp_int*>(w); w += H_.size2()+1;
     qp_int* Pir=reinterpret_cast<qp_int*>(w); w += H_.nnz();
@@ -189,7 +184,6 @@ namespace casadi {
     uout() << "c, h, b: " << c << ", " << h  << ", " << b << std::endl;
     uout() << "new_data: " << new_data << std::endl;
     uout() << "new_data_gA: " << new_data_gA_upper << ", " << new_data_gA_lower << std::endl;
-    uout() << "new_data_gx: " << new_data_gx_upper << ", " << new_data_gx_lower << std::endl;
     uout() << "a_prob_trans: " << a_prob_trans << std::endl;
     uout() << "iw: " << iw << std::endl;
 
@@ -204,12 +198,6 @@ namespace casadi {
     // QP var
     QP *qp_prob;
 
-    // Get constraints
-    std::vector<qp_real> lbx_data = vector_static_cast<qp_real>(std::vector<double>(lbx, lbx+nx_));
-    std::vector<qp_real> lba_data = vector_static_cast<qp_real>(std::vector<double>(lba, lba+na_));
-    std::vector<qp_real> ubx_data = vector_static_cast<qp_real>(std::vector<double>(ubx, ubx+nx_));
-    std::vector<qp_real> uba_data = vector_static_cast<qp_real>(std::vector<double>(uba, uba+na_));
-
     // Check A constraints
     // TODO(@KobeBergmans): Make this assignment more optimal.
     // TODO(@KobeBergmans): Is this needed because who would have unbounded a?
@@ -222,12 +210,12 @@ namespace casadi {
     constr_index_3 = 0;
     constr_index_4 = 0;
     for (casadi_int i = 0; i < na_; ++i) {
-      if (lba_data[i] == uba_data[i]) equality_constr_A[constr_index_1++] = i;
-      if (lba_data[i] == -inf && uba_data[i] == inf) {
+      if (lba[i] == uba[i]) equality_constr_A[constr_index_1++] = i;
+      if (lba[i] == -inf && uba[i] == inf) {
         unbounded_constr_A[constr_index_2++] = i;
-      } else if (lba_data[i] == -inf) {
+      } else if (lba[i] == -inf) {
         unbounded_lower_constr_A[constr_index_3++] = i;
-      } else if (uba_data[i] == inf) {
+      } else if (uba[i] == inf) {
         unbounded_upper_constr_A[constr_index_4++] = i;
       }
     }
@@ -258,13 +246,13 @@ namespace casadi {
     constr_index_3 = 0;
     constr_index_4 = 0;
     for (casadi_int i = 0; i < nx_; ++i) {
-      if (lbx_data[i] == ubx_data[i]) {
+      if (lbx[i] == ubx[i]) {
         equality_constr_x[constr_index_1++] = i;
-      } else if (lbx_data[i] == -inf && ubx_data[i] == inf) {
+      } else if (lbx[i] == -inf && ubx[i] == inf) {
         unbounded_constr_x[constr_index_2++] = i;
-      } else if (lbx_data[i] == -inf) {
+      } else if (lbx[i] == -inf) {
         unbounded_lower_constr_x[constr_index_3++] = i;
-      } else if (ubx_data[i] == inf) {
+      } else if (ubx[i] == inf) {
         unbounded_upper_constr_x[constr_index_4++] = i;
       }
     }
@@ -583,7 +571,7 @@ namespace casadi {
         if (eq_c_x == 0 || i != equality_constr_x[constr_index_1]) {
           if (un_c_x == 0 || i != unbounded_constr_x[constr_index_2]) {
             if (un_u_c_x == 0 || i != unbounded_upper_constr_x[constr_index_3]) {
-              h_vec[h_index] = ubx_data[i];
+              h_vec[h_index] = ubx[i];
               h_index++;
             } else {
               constr_index_3++;
@@ -604,7 +592,7 @@ namespace casadi {
         if (eq_c_x == 0 || i != equality_constr_x[constr_index_1]) {
           if (un_c_x == 0 || i != unbounded_constr_x[constr_index_2]) {
             if (un_l_c_x == 0 || i != unbounded_lower_constr_x[constr_index_3]) {
-              h_vec[h_index] = -lbx_data[i];
+              h_vec[h_index] = -lbx[i];
               h_index++;
             } else {
               constr_index_3++;
@@ -625,7 +613,7 @@ namespace casadi {
         if (eq_c_A == 0 || i != equality_constr_A[constr_index_1]) {
           if (un_c_A == 0 || i != unbounded_constr_A[constr_index_2]) {
             if (un_u_c_A == 0 || i != unbounded_upper_constr_A[constr_index_3]) {
-              h_vec[h_index] = uba_data[i];
+              h_vec[h_index] = uba[i];
               h_index++;
             } else {
               constr_index_3++;
@@ -646,7 +634,7 @@ namespace casadi {
         if (eq_c_A == 0 || i != equality_constr_A[constr_index_1]) {
           if (un_c_A == 0 || i != unbounded_constr_A[constr_index_2]) {
             if (un_l_c_A == 0 || i != unbounded_lower_constr_A[constr_index_3]) {
-              h_vec[h_index] = -lba_data[i];
+              h_vec[h_index] = -lba[i];
               h_index++;
             } else {
               constr_index_3++;
@@ -673,7 +661,7 @@ namespace casadi {
         constr_index_1 = 0;
         for (casadi_int i = 0; i < nx_; ++i) {
           if (i == equality_constr_x[constr_index_1]) {
-              b_vec[h_index] = ubx_data[i];
+              b_vec[h_index] = ubx[i];
               h_index++;
               constr_index_1++;
           }
@@ -684,7 +672,7 @@ namespace casadi {
         constr_index_1 = 0;
         for (casadi_int i = 0; i < na_; ++i) {
           if (i == equality_constr_A[constr_index_1]) {
-              b_vec[h_index] = uba_data[i];
+              b_vec[h_index] = uba[i];
               h_index++;
               constr_index_1++;
           }
