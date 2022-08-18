@@ -2,7 +2,7 @@
  *    This file is part of CasADi.
  *
  *    CasADi -- A symbolic framework for dynamic optimization.
- *    Copyright (C) 2010-2014 Joel Andersson, Joris Gillis, Moritz Diehl,
+ *    Copyright (C) 2010-2014 Joel Andersson, Joris Gillis, Moritz Diehl, Kobe Bergmans,
  *                            K.U. Leuven. All rights reserved.
  *    Copyright (C) 2011-2014 Greg Horn
  *
@@ -135,11 +135,15 @@ namespace casadi {
     /** \brief Codegen alloc_mem */
     void codegen_init_mem(CodeGenerator& g) const override;
 
-    /** \brief Codegen free_mem */
-    void codegen_free_mem(CodeGenerator& g) const override;
-
     /** \brief Thread-local memory object type */
     std::string codegen_mem_type() const override { return "QPSWIFTWorkspace"; }
+
+    void codegen_transpose_sparsity(CodeGenerator& g, std::string nrow, std::string ncol,
+                                    std::string row, std::string col) const;
+
+    void codegen_transpose_data(CodeGenerator& g, std::string nrow, std::string ncol,
+                                std::string row, std::string col, std::string data, 
+                                std::string new_data) const;
 
     void serialize_body(SerializingStream &s) const override;
 

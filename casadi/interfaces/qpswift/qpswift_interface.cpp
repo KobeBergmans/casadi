@@ -2,7 +2,7 @@
  *    This file is part of CasADi.
  *
  *    CasADi -- A symbolic framework for dynamic optimization.
- *    Copyright (C) 2010-2014 Joel Andersson, Joris Gillis, Moritz Diehl,
+ *    Copyright (C) 2010-2014 Joel Andersson, Joris Gillis, Moritz Diehl, Kobe Bergmans,
  *                            K.U. Leuven. All rights reserved.
  *    Copyright (C) 2011-2014 Greg Horn
  *
@@ -129,11 +129,11 @@ namespace casadi {
     alloc_w(nx_, true); // unbounded_upper_constr_x
     alloc_w(nx_, true); // unbounded_lower_constr_x
 
-    alloc_w(na_+1, true); // new_colind_1
-    alloc_w(na_+1, true); // new_colind_2
+    alloc_w(nx_+1+na_+1, true); // new_colind_1 (extra large for codegen)
+    alloc_w(2*(nx_+1)+na_+1, true); // new_colind_2 (extra large for codegen)
     alloc_w(na_+1, true); // new_colind_3
-    alloc_w(A_.nnz(), true); // new_row_1
-    alloc_w(A_.nnz(), true); // new_row_2
+    alloc_w(nx_+A_.nnz(), true); // new_row_1 (extra large for codegen)
+    alloc_w(2*nx_+A_.nnz(), true); // new_row_2 (extra large for codegen)
     alloc_w(A_.nnz(), true); // new_row_3
 
     // TODO(@KobeBergmans): This is probably too much memory because qp_ints are only longs so they take 4 bytes
@@ -200,8 +200,8 @@ namespace casadi {
     qp_int* w_qp = reinterpret_cast<qp_int*>(w_ci);
     qp_int* Pjc = w_qp; w_qp += H_.size2()+1;
     qp_int* Pir = w_qp; w_qp += H_.nnz();
-    qp_int* Ajc = w_qp; w_qp += A_.size2()+1;
-    qp_int* Air = w_qp; w_qp += A_.nnz();
+    qp_int* Ajc = w_qp; w_qp += nx_ + A_.size2()+1;
+    qp_int* Air = w_qp; w_qp += nx_ + A_.nnz();
     qp_int* Gjc = w_qp; w_qp += 2*(nx_ + A_.size2()+1);
     qp_int* Gir = w_qp; w_qp += 2*(nx_ + A_.nnz());
 
@@ -258,7 +258,7 @@ namespace casadi {
     uout() << "Unbounded lower A constraints: " << std::vector<casadi_int>(unbounded_lower_constr_A, unbounded_lower_constr_A+index_2) << std::endl;
     uout() << "Unbounded upper A constraints: " << std::vector<casadi_int>(unbounded_upper_constr_A, unbounded_upper_constr_A+index_3) << std::endl;
 
-    // Define vars for readability
+    // Define var for readability
     casadi_int eq_c_A = index_1;
 
     // Check x constraints
@@ -288,7 +288,7 @@ namespace casadi {
     uout() << "Unbounded lower x constraints: " << std::vector<casadi_int>(unbounded_lower_constr_x, unbounded_lower_constr_x+index_2) << std::endl;
     uout() << "Unbounded upper x constraints: " << std::vector<casadi_int>(unbounded_upper_constr_x, unbounded_upper_constr_x+index_3) << std::endl;
 
-    // Define vars for readability
+    // Define var for readability
     casadi_int eq_c_x = index_1;
 
     // Error if there are only equality constraints
@@ -762,131 +762,440 @@ namespace casadi {
     return 0;
   }
 
-  void QpswiftInterface::codegen_free_mem(CodeGenerator& g) const {
-    g << "qpswift_cleanup(" + codegen_mem(g) + ");\n";
-  }
-
   void QpswiftInterface::codegen_init_mem(CodeGenerator& g) const {
-    Sparsity Asp = vertcat(Sparsity::diag(nx_), A_);
-    casadi_int dummy_size = max(nx_+na_, max(Asp.nnz(), H_.nnz()));
-
-    g.local("A", "csc");
-    g.local("dummy[" + str(dummy_size) + "]", "casadi_real");
-    g << g.clear("dummy", dummy_size) << "\n";
-
-    g.constant_copy("A_row", Asp.get_row(), "c_int");
-    g.constant_copy("A_colind", Asp.get_colind(), "c_int");
-    g.constant_copy("H_row", H_.get_row(), "c_int");
-    g.constant_copy("H_colind", H_.get_colind(), "c_int");
-
-    g.local("A", "csc");
-    g << "A.m = " << nx_ + na_ << ";\n";
-    g << "A.n = " << nx_ << ";\n";
-    g << "A.nz = " << nnzA_ << ";\n";
-    g << "A.nzmax = " << nnzA_ << ";\n";
-    g << "A.x = dummy;\n";
-    g << "A.i = A_row;\n";
-    g << "A.p = A_colind;\n";
-
-    g.local("H", "csc");
-    g << "H.m = " << nx_ << ";\n";
-    g << "H.n = " << nx_ << ";\n";
-    g << "H.nz = " << H_.nnz() << ";\n";
-    g << "H.nzmax = " << H_.nnz() << ";\n";
-    g << "H.x = dummy;\n";
-    g << "H.i = H_row;\n";
-    g << "H.p = H_colind;\n";
-
-    g.local("data", "QPSWIFTData");
-    g << "data.n = " << nx_ << ";\n";
-    g << "data.m = " << nx_ + na_ << ";\n";
-    g << "data.P = &H;\n";
-    g << "data.q = dummy;\n";
-    g << "data.A = &A;\n";
-    g << "data.l = dummy;\n";
-    g << "data.u = dummy;\n";
-
-    // g.local("settings", "QPSWIFTSettings");
-    // g << "qpswift_set_default_settings(&settings);\n";
-    // g << "settings.rho = " << settings_.rho << ";\n";
-    // g << "settings.sigma = " << settings_.sigma << ";\n";
-    // g << "settings.scaling = " << settings_.scaling << ";\n";
-    // g << "settings.adaptive_rho = " << settings_.adaptive_rho << ";\n";
-    // g << "settings.adaptive_rho_interval = " << settings_.adaptive_rho_interval << ";\n";
-    // g << "settings.adaptive_rho_tolerance = " << settings_.adaptive_rho_tolerance << ";\n";
-    //g << "settings.adaptive_rho_fraction = " << settings_.adaptive_rho_fraction << ";\n";
-    // g << "settings.max_iter = " << settings_.max_iter << ";\n";
-    // g << "settings.eps_abs = " << settings_.eps_abs << ";\n";
-    // g << "settings.eps_rel = " << settings_.eps_rel << ";\n";
-    // g << "settings.eps_prim_inf = " << settings_.eps_prim_inf << ";\n";
-    // g << "settings.eps_dual_inf = " << settings_.eps_dual_inf << ";\n";
-    // g << "settings.alpha = " << settings_.alpha << ";\n";
-    // g << "settings.delta = " << settings_.delta << ";\n";
-    // g << "settings.polish = " << settings_.polish << ";\n";
-    // g << "settings.polish_refine_iter = " << settings_.polish_refine_iter << ";\n";
-    // g << "settings.verbose = " << settings_.verbose << ";\n";
-    // g << "settings.scaled_termination = " << settings_.scaled_termination << ";\n";
-    // g << "settings.check_termination = " << settings_.check_termination << ";\n";
-    // g << "settings.warm_start = " << settings_.warm_start << ";\n";
-    //g << "settings.time_limit = " << settings_.time_limit << ";\n";
-
-    g << codegen_mem(g) + " = qpswift_setup(&data, &settings);\n";
     g << "return 0;\n";
   }
 
   void QpswiftInterface::codegen_body(CodeGenerator& g) const {
-    g.add_include("qpswift/qpswift.h");
+    g.add_include("qpSWIFT/qpSWIFT.h");
     g.add_auxiliary(CodeGenerator::AUX_INF);
 
     g.local("work", "QPSWIFTWorkspace", "*");
     g.init_local("work", codegen_mem(g));
 
-    g.comment("Set objective");
-    g.copy_default(g.arg(CONIC_G), nx_, "w", "0", false);
-    g << "if (qpswift_update_lin_cost(work, w)) return 1;\n";
+    g.comment("Set memory locations and copy some vectors");
+    g << "double * lbx = w; w += " << nx_ << ";\n";
+    g.copy_default(g.arg(CONIC_LBX), nx_, "lbx", "-casadi_inf", false);
+    g << "double * ubx = w; w += " << nx_ << ";\n";
+    g.copy_default(g.arg(CONIC_UBX), nx_, "ubx", "casadi_inf", false);
+    g << "double * lba = w; w += " << na_ << ";\n";
+    g.copy_default(g.arg(CONIC_LBX), nx_, "lba", "-casadi_inf", false);
+    g << "double * uba = w; w += " << na_ << ";\n";
+    g.copy_default(g.arg(CONIC_UBX), nx_, "uba", "casadi_inf", false);
+    g << "double* Ppr = w; w += " << H_.nnz() << ";\n";
+    g.copy(g.arg(CONIC_H), H_.nnz(), "Ppr");
+    g << "double* Apr=w; w += " << A_.nnz() << ";\n";
+    g << "double* Gpr=w; w += " << A_.nnz() << ";\n";
+    g << "double* c=w; w += " << nx_ << ";\n";
+    g << "double* h=w; w += " << 2*(nx_+na_) << ";\n";
+    g << "double* b=w; w += " << nx_+na_ << ";\n";
+    g << "double* new_data=w; w += " << 2*(nx_+A_.nnz()) << ";\n";
+    g << "double* a_prob_trans=w; w += " << A_.nnz() << ";\n";
+    g << "double* new_data_gA_upper=w; w += " << A_.nnz() << ";\n";
+    g << "double* new_data_gA_lower=w; w += " << A_.nnz() << ";\n";
 
-    g.comment("Set bounds");
-    g.copy_default(g.arg(CONIC_LBX), nx_, "w", "-casadi_inf", false);
-    g.copy_default(g.arg(CONIC_LBA), na_, "w+"+str(nx_), "-casadi_inf", false);
-    g.copy_default(g.arg(CONIC_UBX), nx_, "w+"+str(nx_+na_), "casadi_inf", false);
-    g.copy_default(g.arg(CONIC_UBA), na_, "w+"+str(2*nx_+na_), "casadi_inf", false);
-    g << "if (qpswift_update_bounds(work, w, w+" + str(nx_+na_)+ ")) return 1;\n";
+    g << "casadi_int* w_ci = (qp_int*)w;\n";
+    g << "casadi_int* equality_constr_A = w_ci; w_ci += " << na_ << ";\n";
+    g << "casadi_int* unbounded_lower_constr_A = w_ci; w_ci += " << na_ << ";\n";
+    g << "casadi_int* unbounded_upper_constr_A = w_ci; w_ci += " << na_ << ";\n";
+    g << "casadi_int* equality_constr_x = w_ci; w_ci += " << nx_ << ";\n";
+    g << "casadi_int* unbounded_lower_constr_x = w_ci; w_ci += " << nx_ << ";\n";
+    g << "casadi_int* unbounded_upper_constr_x = w_ci; w_ci += " << nx_ << ";\n";
 
-    g.comment("Project Hessian");
-    g << g.tri_project(g.arg(CONIC_H), H_, "w", false);
+    g << "casadi_int* new_colind_1 = w_ci; w_ci += " << nx_+1+na_+1 << ";\n";
+    g << "casadi_int* new_colind_2 = w_ci; w_ci += " << 2*(nx_+1)+na_+1 << ";\n";
+    g << "casadi_int* new_colind_3 = w_ci; w_ci += " << na_+1 << ";\n";
+    g << "casadi_int* new_row_1 = w_ci; w_ci += " << nx_+A_.nnz() << ";\n";
+    g << "casadi_int* new_row_2 = w_ci; w_ci += " << 2*nx_+A_.nnz() << ";\n";
+    g << "casadi_int* new_row_3 = w_ci; w_ci += " << A_.nnz() << ";\n";
 
-    g.comment("Get constraint matrix");
-    std::string A_colind = g.constant(A_.get_colind());
-    g.local("offset", "casadi_int");
-    g.local("n", "casadi_int");
-    g.local("i", "casadi_int");
-    g << "offset = 0;\n";
-    g << "for (i=0; i< " << nx_ << "; ++i) {\n";
-    g << "w[" + str(nnzHupp_) + "+offset] = 1;\n";
-    g << "offset++;\n";
-    g << "n = " + A_colind + "[i+1]-" + A_colind + "[i];\n";
-    g << "casadi_copy(" << g.arg(CONIC_A) << "+" + A_colind + "[i], n, "
-         "w+offset+" + str(nnzHupp_) + ");\n";
-    g << "offset+= n;\n";
+    g << "qp_int* w_qp = (qp_int*)w_ci;\n";
+    g << "qp_int* Pjc = w_qp; w_qp += " << H_.size2()+1 << ";\n";
+    g << "qp_int* Pir = w_qp; w_qp += " << H_.nnz() << ";\n";
+    g << "qp_int* Ajc = w_qp; w_qp += " << nx_ + A_.size2()+1 << ";\n";
+    g << "qp_int* Air = w_qp; w_qp += " << nx_ + A_.nnz() << ";\n";
+    g << "qp_int* Gjc = w_qp; w_qp += " << 2*(nx_ + A_.size2()+1) << ";\n";
+    g << "qp_int* Gir = w_qp; w_qp += " << 2*(nx_ + A_.nnz()) << ";\n";
+
+    g.comment("indices");
+    g << "casadi_int index_1, index_2, index_3;\n";
+
+    g.comment("QP var");
+    g << "QP *qp_prob;\n";
+
+    g.comment("casadi_zero");
+    g << "const casadi_int c_zero = 0;\n";
+
+    g.comment("Check A constraints");
+    g << "casadi_int un_c_A = 0;\n";
+    g << "casadi_int un_l_c_A = 0;\n";
+    g << "casadi_int un_h_c_A = 0;\n";
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "index_3 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << na_ << "; ++i) {\n";
+    g << "if (lba[i] == uba[i]) {\n";
+    g << "equality_constr_A[index_1++] = i;\n";
+    g << "} else if (lba[i] == -casadi_inf && uba[i] == casadi_inf) {\n";
+    g << "un_c_A++;\n";
+    g << "unbounded_lower_constr_A[index_2++] = i;\n";
+    g << "unbounded_upper_constr_A[index_3++] = i;\n";
+    g << "} else if (lba[i] == -casadi_inf) {\n";
+    g << "un_l_c_A++;\n";
+    g << "unbounded_lower_constr_A[index_2++] = i;\n";
+    g << "} else if (uba[i] == casadi_inf) {\n";
+    g << "un_u_c_A++;\n";
+    g << "unbounded_upper_cosntr_A[index_3++] = i;\n";
+    g << "}\n";
     g << "}\n";
 
-    g.comment("Pass Hessian and constraint matrices");
-    g << "if (qpswift_update_P_A(work, w, 0, " + str(nnzHupp_) + ", w+" + str(nnzHupp_) +
-         ", 0, " + str(nnzA_) + ")) return 1;\n";
+    g.comment("Define var for readability");
+    g << "casadi_int eq_c_A = index_1;\n";
 
-    g << "if (qpswift_warm_start_x(work, " + g.arg(CONIC_X0) + ")) return 1;\n";
-    g.copy_default(g.arg(CONIC_LAM_X0), nx_, "w", "0", false);
-    g.copy_default(g.arg(CONIC_LAM_A0), na_, "w+"+str(nx_), "0", false);
-    g << "if (qpswift_warm_start_y(work, w)) return 1;\n";
+    g.comment("Check x constraints");
+    g << "casadi_int un_c_x = 0;\n";
+    g << "casadi_int un_l_c_x = 0;\n";
+    g << "casadi_int un_h_c_x = 0;\n";
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "index_3 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
+    g << "if (lbx[i] == ubx[i]) {\n";
+    g << "equality_constr_x[index_1++] = i;\n";
+    g << "} else if (lbx[i] == -casadi_inf && ubx[i] == casadi_inf) {\n";
+    g << "un_c_x++;\n";
+    g << "unbounded_lower_constr_x[index_2++] = i;\n";
+    g << "unbounded_upper_constr_x[index_3++] = i;\n";
+    g << "} else if (lbx[i] == -casadi_inf) {\n";
+    g << "un_l_c_x++;\n";
+    g << "unbounded_lower_constr_x[index_2++] = i;\n";
+    g << "} else if (ubx[i] == casadi_inf) {\n";
+    g << "un_u_c_x++;\n";
+    g << "unbounded_upper_cosntr_x[index_3++] = i;\n";
+    g << "}\n";
+    g << "}\n";
 
-    g << "if (qpswift_solve(work)) return 1;\n";
+    g.comment("Define var for readability");
+    g << "casadi_int eq_c_x = index_1;\n";
 
-    g.copy_check("&work->info->obj_val", 1, g.res(CONIC_COST), false, true);
-    g.copy_check("work->solution->x", nx_, g.res(CONIC_X), false, true);
-    g.copy_check("work->solution->y", nx_, g.res(CONIC_LAM_X), false, true);
-    g.copy_check("work->solution->y+" + str(nx_), na_, g.res(CONIC_LAM_A), false, true);
+    g.comment("Error if there are only equality constraints");
+    g << "if (eq_c_x + un_c_x == " << nx_ << " && eq_c_A + un_c_A == " << na_ << ") {\n";
+    g << "return -1;\n";
+    g << "}\n";
 
-    g << "if (work->info->status_val != QPSWIFT_SOLVED) return 1;\n";
+    g.comment("Number of desiscion vars and constraints");
+    g << "qp_int nc = " << nx_ << ";\n";
+    g << "qp_int mc = 2*(" << nx_+na_ << "-eq_c_A-eq_c_x-un_c_x-un_c_A)-un_l_c_x-un_u_c_x-un_l_c_A-un_u_c_A;\n";
+    g << "qp_int pc = eq_c_A + eq_c_x";
+
+    g.comment("P sparsity");
+    g.constant_copy("Pjc", H_.get_colind(), "qp_int");
+    g.constant_copy("Pir", H_.get_row(), "qp_int");
+
+    g.comment("A sparsity, x part");
+    g << "new_colind_1[0] = 0";
+    g << "if (eq_c_x > 0) {\n";
+    g << "for (casadi_int i = 0; i < eq_c_x; ++i) {\n";
+    g << "new_colind_1[i+1] = new_colind_1[i] + 1;\n";
+    g << "new_row_1[i] = equality_constr_x[i];\n";
+    g << "}\n";
+    g << "}\n";
+    g << "index_1 = i;\n";
+
+    g.comment("A sparsity, Ax part (here we use temp variables Ajc and Air)");
+    Sparsity A_trans = A_.T();
+    g << "const double *a_prob = " << g.arg(CONIC_A) << ";\n";
+    g.constant_copy("Ajc", A_trans.get_colind(), "qp_int");
+    g.constant_copy("Air", A_trans.get_row(), "qp_int");
+    g << "const qp_int *A_trans_colind, *A_trans_row;\n";
+    g << g.fill("new_data", 2*(nx_+A_.nnz()), "1.") << "\n";
+    
+    g << "double* a_prob_trans_temp = a_prob_trans;\n";
+    g << g.trans("a_prob", A_, "a_prob_trans", A_trans, "&iw") << "\n";
+    g << "if (eq_c_A > 0) {\n";
+    g << "A_trans_colind = Ajc;\n";
+    g << "A_trans_row = Air;\n";
+    
+    g << "for (casadi_int i = 0; i < " << A_.size1() << "; ++i) {\n";
+    g << "if (equality_constr_A[index_1] == i) {\n";
+    g << "casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_1+new_colind_1[index_1]);\n";
+    g << "casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data+new_colind_1[index_1]+eq_c_x);\n";
+    g << "new_colind_1[index_1+1] = new_colind_1[index_1] + *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "index_1++;\n";
+    g << "if (index_1 == eq_c_A) break;\n";
+    g << "}\n";
+
+    g << "A_trans_row += *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "a_prob_trans_temp += *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "A_trans_colind++;\n";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("A Sparsity");
+    g << "if (eq_c_x > 0 || eq_c_A > 0) {\n";
+    codegen_transpose_sparsity(g, str(nx_), "eq_c_x+eq_c_A", "Air", "Ajc");
+    g << "} else {\n";
+    g << "Ajc = NULL;\n";
+    g << "Air = NULL;\n";
+    g << "}\n";
+
+    g.comment("A data");
+    g << "if (eq_c_A == 0 && eq_c_x == 0) {\n";
+    g << "Apr = NULL;\n";
+    g << "} else {\n";
+    codegen_transpose_data(g, str(nx_), "eq_c_x+eq_c_A", "Air", "Ajc", "new_data", "Apr");
+    g << "}\n";
+
+    g.comment("G sparsity: x upper bound part");
+    g << "new_colind_2[0] = 0;\n";
+    g << "if (eq_c_x+un_c_x+un_u_c_x != " << nx_ << ") {\n";
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "index_3 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
+    g << "if (eq_c_x == 0 || i != equality_constr_x[index_1]) {\n";
+    g << "if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[index_2]) {\n";
+    g << "new_colind_2[index_3+1] = Ajc[index_3] + 1;\n";
+    g << "new_row_2[i] = i;\n";
+    g << "index_3++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("G sparsity: x lower bound part");
+    g << "new_colind_2[0] = 0;\n";
+    g << "if (eq_c_x+un_c_x+un_u_c_x != " << nx_ << ") {\n";
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
+    g << "if (eq_c_x == 0 || i != equality_constr_x[index_1]) {\n";
+    g << "if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_lower_constr_x[index_2]) {\n";
+    g << "new_colind_2[index_3+1] = Ajc[index_3] + 1;\n";
+    g << "new_row_2[i] = i;\n";
+    g << "index_3++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("G sparsity: Ax upper bound part");
+    g << "if (eq_c_A+un_c_A+un_u_c_A != na_) {\n";
+    g.constant_copy("Gjc", A_trans.get_colind(), "qp_int");
+    g.constant_copy("Gir", A_trans.get_row(), "qp_int");
+    g << "a_prob = " << g.arg(CONIC_A) << ";\n";
+    g << "A_trans_colind = Gjc;\n";
+    g << "A_trans_row = Gir;\n";
+    g << "a_prob_trans_temp = a_prob_trans;\n";
+
+    g << "new_colind_2[0] = 0;\n";
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << A_.size1() << "; ++i) {\n";
+    g << "if (eq_c_A == 0 || equality_constr_A[index_1] != i) {\n";
+    g << "if ((un_c_A == 0 && un_u_c_A == 0) || unbounded_upper_constr_A[index_2] != i) {\n";
+    g << "casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_2+new_colind_2[index_3]);\n";
+    g << "casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data_gA_upper+new_colind_2[index_3]);\n";
+    g << "new_colind_2[index_3+1] = new_colind_2[index_3] + *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "index_3++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+
+    g << "A_trans_row += *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "a_prob_trans_temp += *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "A_trans_colind++;";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("G sparsity: Ax lower bound part");
+    g << "if (eq_c_A+un_c_A+un_l_c_A != na_) {\n";
+    g << "a_prob = " << g.arg(CONIC_A) << ";\n";
+    g << "A_trans_colind = Gjc;\n";
+    g << "A_trans_row = Gir;\n";
+    g << "a_prob_trans_temp = a_prob_trans;\n";
+
+    g << "new_colind_3[0] = 0;\n";
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "index_3 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << A_.size1() << "; ++i) {\n";
+    g << "if (eq_c_A == 0 || equality_constr_A[index_1] != i) {\n";
+    g << "if ((un_c_A == 0 && un_l_c_A == 0) || unbounded_lower_constr_A[index_2] != i) {\n";
+    g << "casadi_copy(A_trans_row, *(A_trans_colind+1) - *A_trans_colind, new_row_3+new_colind_3[index_3]);\n";
+    g << "casadi_copy(a_prob_trans_temp, *(A_trans_colind+1) - *A_trans_colind, new_data_gA_lower+new_colind_3[index_3]);\n";
+    g << "new_colind_3[index_3+1] = new_colind_3[index_3] + *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "index_3++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+
+    g << "A_trans_row += *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "a_prob_trans_temp += *(A_trans_colind+1) - *A_trans_colind;\n";
+    g << "A_trans_colind++;\n";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("G sparsity");
+    g << "if (eq_c_A+un_c_A != " << na_ << " || eq_c_x+un_c_x != " << nx_ << ") {\n";
+    // TODO(@KobeBergmans)
+    g << "} else {\n";
+    g << "Gjc = NULL;\n";
+    g << "}\n";
+
+    g.comment("G data");
+    g << "if (eq_c_A+un_c_A != " << na_ << " || eq_c_x+un_c_x != " << nx_ << ") {\n";
+    // TODO(@KobeBergmans)
+    g << "} else {\n";
+    g << "Gpr = NULL;\n";
+    g << "}\n";
+
+    g.comment("c data");
+    g << "if (" << g.arg(CONIC_G) << ") {\n";
+    g << g.copy(g.arg(CONIC_G), nx_, "c") << "\n";
+    g << "} else {\n";
+    g << "c = NULL;\n";
+    g << "}\n";
+
+    g.comment("h data");
+    g << "if (eq_c_A+un_c_A != " << na_ << " || eq_c_x+un_c_x != " << nx_ << ") {\n";
+    g << "casadi_int h_index = 0;\n";
+    
+    g.comment("x upper part");
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
+    g << "if (eq_c_x == 0 || i != equality_constr_x[index_1]) {\n";
+    g << "if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[index_2]) {\n";
+    g << "h[h_index] = ubx[i];\n";
+    g << "h_index++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("x lower part");
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
+    g << "if (eq_c_x == 0 || i != equality_constr_x[index_1]) {\n";
+    g << "if ((un_c_x == 0 && un_l_c_x == 0) || i != unbounded_lower_constr_x[index_2]) {\n";
+    g << "h[h_index] = -lbx[i];\n";
+    g << "h_index++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("A upper part");
+    g << "index_1 = 0;\n";
+    g << "index-2 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << na_ << "; ++i) {\n";
+    g << "if (eq_c_A == 0 || i != equality_constr_A[index_1]) {\n";
+    g << "if ((un_c_A == 0 && un_u_c_A == 0) || i != unbounded_upper_constr_A[index_2]) {\n";
+    g << "h[h_index] = uba[i];\n";
+    g << "h_index++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+
+    g.comment("A lower part");
+    g << "index_1 = 0;\n";
+    g << "index_2 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << na_ << "; ++i) {\n";
+    g << "if (eq_c_A == 0 || i != equality_constr_A[index_1]) {\n";
+    g << "if ((un_c_A == 0 && un_l_c_A == 0) || i != unbounded_lower_constr_A[index_2]) {\n";
+    g << "h[h_index] = -lba[i];\n";
+    g << "h_index++;\n";
+    g << "} else {\n";
+    g << "index_2++;\n";
+    g << "}\n";
+    g << "} else {\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+
+    g << "} else {\n";
+    g << "h = NULL;\n";
+    g << "}\n";
+
+    g.comment("b Data");
+    g << "if (eq_c_A > 0 || eq_c_x > 0) {\n";
+    g << "casadi_int b_index = 0;\n";
+    g << "if (eq_c_x > 0) {\n";
+    g << "index_1 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
+    g << "if (i == equality_constr_x[index_1]) {\n";
+    g << "b[b_index] = ubx[i];\n";
+    g << "b_index++;\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+    g << "}\n";
+
+    g << "if (eq_c_A > 0) {\n";
+    g << "index_1 = 0;\n";
+    g << "for (casadi_int i = 0; i < " << na_ << "; ++i) {\n";
+    g << "if (i == equality_constr_A[index_1]) {\n";
+    g << "b[b_index] = uba[i];\n";
+    g << "b_index++;\n";
+    g << "index_1++;\n";
+    g << "}\n";
+    g << "}\n";
+    g << "}\n";
+
+    g << "} else {\n";
+    g << "b = NULL;\n";
+    g << "}\n";
+
+    g.comment("Get solver");
+    g << "qp_prob = QP_SETUP(nc, mc, pc, Pjc, Pir, Ppr, Ajc, Air, Apr, Gjc, Gir, Gpr, c, h, b, 0, NULL);\n";
+
+    g.comment("Change solver settings");
+    if (maxit_ != 0) g << "qp_prob.options.maxit = " << maxit_ << ";\n";
+    if (reltol_ != 0.) g << "qp_prob.options.reltol = " << reltol_ << ";\n";
+    if (abstol_ != 0.) g << "qp_prob.options.abstol = " << abstol_ << ";\n";
+    if (sigma_ != 0.) g << "qp_prob.options.sigma = " << sigma_ << ";\n";
+    if (verbose_ != 0) g << "qp_prob.options.verbose = " << verbose_ << ";\n";
+
+    g.comment("Solve QP");
+    // TODO(@KobeBergmans)
+  }
+
+  void QpswiftInterface::codegen_transpose_sparsity(CodeGenerator& g, std::string nrow, std::string ncol,
+                                           std::string row, std::string col) const {
+    // TODO(@KobeBergmans): see sparsity_internal::triplet
+    //                      Results should also end up in row and col vectors
+  }
+
+  void QpswiftInterface::codegen_transpose_data(CodeGenerator& g, std::string nrow, std::string ncol,
+                                           std::string row, std::string col, std::string data, 
+                                           std::string new_data) const {
+    // TODO(@KobeBergmans)
   }
 
   Dict QpswiftInterface::get_stats(void* mem) const {
