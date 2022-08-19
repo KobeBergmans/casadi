@@ -145,6 +145,7 @@ namespace casadi {
     alloc_w(nx_ + A_.nnz(), true); // Air
 
     alloc_iw(2*(na_+nx_)); // casadi_trans
+    alloc_iw(4*(A_.nnz()+nx_)); // For work memory in codegen
   }
 
   int QpswiftInterface::init_mem(void* mem) const {
@@ -933,7 +934,7 @@ namespace casadi {
 
     g.comment("A Sparsity");
     g << "if (eq_c_x > 0 || eq_c_A > 0) {\n";
-    codegen_transpose_sparsity(g, str(nx_), "eq_c_x+eq_c_A", "Air", "Ajc");
+    codegen_transpose_sparsity(g, str(nx_), "eq_c_x+eq_c_A", "new_row_1", "new_colind_1", "Ajc", "Air", "iw");
     g << "} else {\n";
     g << "Ajc = NULL;\n";
     g << "Air = NULL;\n";
@@ -943,7 +944,7 @@ namespace casadi {
     g << "if (eq_c_A == 0 && eq_c_x == 0) {\n";
     g << "Apr = NULL;\n";
     g << "} else {\n";
-    codegen_transpose_data(g, str(nx_), "eq_c_x+eq_c_A", "Air", "Ajc", "new_data", "Apr");
+    codegen_transpose_data(g, str(nx_), "eq_c_x+eq_c_A", "Air", "new_colind_1", "new_data_1", "Apr", "iw");
     g << "}\n";
 
     g.comment("G sparsity: x upper bound part");
@@ -955,7 +956,7 @@ namespace casadi {
     g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
     g << "if (eq_c_x == 0 || i != equality_constr_x[index_1]) {\n";
     g << "if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_upper_constr_x[index_2]) {\n";
-    g << "new_colind_2[index_3+1] = Ajc[index_3] + 1;\n";
+    g << "new_colind_2[index_3+1] = new_colind_2[index_3] + 1;\n";
     g << "new_row_2[i] = i;\n";
     g << "index_3++;\n";
     g << "} else {\n";
@@ -968,14 +969,13 @@ namespace casadi {
     g << "}\n";
 
     g.comment("G sparsity: x lower bound part");
-    g << "new_colind_2[0] = 0;\n";
     g << "if (eq_c_x+un_c_x+un_u_c_x != " << nx_ << ") {\n";
     g << "index_1 = 0;\n";
     g << "index_2 = 0;\n";
     g << "for (casadi_int i = 0; i < " << nx_ << "; ++i) {\n";
     g << "if (eq_c_x == 0 || i != equality_constr_x[index_1]) {\n";
     g << "if ((un_c_x == 0 && un_u_c_x == 0) || i != unbounded_lower_constr_x[index_2]) {\n";
-    g << "new_colind_2[index_3+1] = Ajc[index_3] + 1;\n";
+    g << "new_colind_2[index_3+1] = new_colind_2[index_3] + 1;\n";
     g << "new_row_2[i] = i;\n";
     g << "index_3++;\n";
     g << "} else {\n";
@@ -987,7 +987,7 @@ namespace casadi {
     g << "}\n";
     g << "}\n";
 
-    g.comment("G sparsity: Ax upper bound part");
+    g.comment("G sparsity: Ax upper bound part (using temp variables Gjc & Gir)");
     g << "if (eq_c_A+un_c_A+un_u_c_A != na_) {\n";
     g.constant_copy("Gjc", A_trans.get_colind(), "qp_int");
     g.constant_copy("Gir", A_trans.get_row(), "qp_int");
@@ -1187,15 +1187,136 @@ namespace casadi {
   }
 
   void QpswiftInterface::codegen_transpose_sparsity(CodeGenerator& g, std::string nrow, std::string ncol,
-                                           std::string row, std::string col) const {
-    // TODO(@KobeBergmans): see sparsity_internal::triplet
-    //                      Results should also end up in row and col vectors
+                                           std::string row, std::string colind, 
+                                           std::string new_row, std::string new_colind, std::string temp) const {
+
+    std::string nnz = str(colind) + "[" + str(ncol) + "]";
+
+    // See SparsityInternal::get_col()
+    g << "for (casadi_int r=0; r < " << nnz << "; ++r) {\n";
+    g << "for (casadi_int el = " << colind << "[r]; el < " << colind << "[r+1]; ++el) {\n";
+    g << temp << "[el] = r;\n";
+    g << "}\n";
+    g << "}\n";
+
+    // See SparsityInternal::transpose: trans_col = row, trans_row = temp
+    //                                  size2() = ncol, size1() = nrow
+    
+    // see Sparsity::triplet: nrow = ncol, ncol = nrow, row = temp, col = row, 
+    //                        mapping = [], invert_mapping = false
+  
+    g.comment("Consistency check and check if elements are already perfectly ordered with no duplicates");
+    g << "casadi_int last_col = -1;\n";
+    g << "casadi_int last_row = -1;\n";
+    g << "int perfectly_ordered = 1;\n";
+    g << "for (casadi_int k = 0; k < " << nnz << "; ++k) {\n";
+    g.comment("Consistency check");
+    g << "perfectly_ordered = perfectly_ordered && (" << row << "[k]<last_col || ";
+    g << "(" << row << "[k]==last_col && " << temp << "[k]<=last_row));\n";
+    g << "last_col = " << row << "[k];\n";
+    g << "last_row = " << temp << "[k];\n";
+    g << "}\n";
+
+    g.comment("Quick return if perfectly ordered");
+    g << "if (perfectly_ordered) {\n";
+    g.comment("Save rows");
+    g << "casadi_copy(" << temp << ", " << nnz << ", " << new_row << ");\n";
+    
+    g.comment("Find offset index");
+    g << "casadi_int el = 0;\n";
+    g << "for (casadi_int i = 0; i < " << nrow << "; ++i) {\n";
+    g << "while (el < " << nnz << " && " << row << "[el]==i) el++;\n";
+    g << new_colind << "[i+1] = el;\n";
+    g << "}\n";
+
+    g.comment("Quick return");
+    g << "} else {\n";
+    
+    g.comment("Reuse data");
+    // mapping1 = empty vector
+    // mapping2 = Air
+
+    g.comment("Make sure that enough memory is allocated to use as a work vector");
+    g << "casadi_int* rowcount = (casadi_int*)iw;\n";
+    g << "rowcount += " << 2*A_.nnz()+2*nx_ << ";\n";
+
+    g.comment("Number of elements in each row");
+    g << g.fill("rowcount", A_.nnz()+nx_, "0") << "\n";
+    g << "for (casadi_int* i = " << temp << "; i != " << temp << " + " << nnz << "; ++it) {\n";
+    g << "rowcount[*it+1]++;\n";
+    g << "}\n";
+
+    g.comment("Cumsum to get index offset for each row");
+    g << "for (casadi_int i=0; i < " << ncol << "; ++i) {\n";
+    g << "rowcount[i+1] += rowcount[i];\n";
+    g << "}\n";
+
+    g.comment("New row for each old row");
+    g << "for (casadi_int k=0; k < " << nnz << "; ++k) {\n";
+    g << new_row << "[rowcount[" << temp << "[k]]++] = k;\n";
+    g << "}\n";
+
+    g.comment("Number of elements in each col");
+    g << "for (casadi_int* i = " << new_row << "; i != " << new_row << " + " << nnz << "; ++i) {\n";
+    g << new_colind << "[" << row << "[*it]+1]++;\n";
+    g << "}\n";
+
+    g.comment("Cumsum to get index offset for each col");
+    g << "for (casadi_int i=0; i < " << nrow << "; ++i) {\n";
+    g << new_colind << "[i+1] += " << new_colind << "[i];\n";
+    g << "}\n";
+
+    g.comment("New col for each old col");
+    g << "casadi_int* mapping1 = rowcount;\n";
+    g << "for (casadi_int* i = mapping1; i != mapping1 + " << nnz << "; ++i) {\n";
+    g << "mapping1[" << new_colind << "[" << row << "[*it]]++] = *it;\n";
+    g << "}\n";
+
+    g.comment("Current element in return matrix");
+    g << "casadi_int r_el = 0;\n";
+    
+    g.comment("Current nonzero");
+    g << "casadi_int* it = mapping1";
+
+    g.comment("Loop over columns");
+    g << new_colind << "[0] = 0;\n";
+    g << "for (casadi_int i=0; i < " << nrow << "; ++i) {\n";
+
+    g.comment("Previous row (to detect duplicates)");
+    g << "casadi_int j_prev = -1;\n";
+
+    g.comment("Loop over nonzero elements of the col");
+    g << "while (it!=mapping1 + " << nnz << " && " << row << "[*it]==i) {\n";
+
+    g.comment("Get the element");
+    g << "casadi_int el = *it;\n";
+    g << "it++;\n";
+
+    g.comment("Get the row");
+    g << "casadi_int j = " << temp << "[el];\n";
+
+    g.comment("If not a duplicate, save to return matrix");
+    g << "if (j != j_prev)\n";
+    g << new_row << "[r_el++] = j;\n";
+
+    g.comment("If not a duplicate, save to the mapping vector");
+    g << "if (j != j_prev)\n";
+    g << "mapping1[r_el-1] = el;\n";
+
+    g.comment("Save row");
+    g << "j_prev = j;\n";
+    g << "}\n";
+    
+    g << "}\n";
   }
 
   void QpswiftInterface::codegen_transpose_data(CodeGenerator& g, std::string nrow, std::string ncol,
-                                           std::string row, std::string col, std::string data, 
-                                           std::string new_data) const {
-    // TODO(@KobeBergmans)
+                                           std::string row, std::string new_colind, std::string data, 
+                                           std::string new_data, std::string iw) const {
+    // see casadi_trans
+    g << "for (casadi_int k = 0; i < " << nrow << "; ++k) iw[k] = " << new_colind << "[k];\n";
+    g << "for (casadi_int k = 0; k < " << new_colind << "[" << ncol << "]" << "; ++k) {\n";
+    g << new_data << "[" << iw << "[" << row << "[k]]++] = " << data << "[k];\n";
   }
 
   Dict QpswiftInterface::get_stats(void* mem) const {

@@ -138,12 +138,14 @@ namespace casadi {
     /** \brief Thread-local memory object type */
     std::string codegen_mem_type() const override { return "QPSWIFTWorkspace"; }
 
+    /** Generate code for transposition of the sparsity. The first variables are all properties of the original matrix */
     void codegen_transpose_sparsity(CodeGenerator& g, std::string nrow, std::string ncol,
-                                    std::string row, std::string col) const;
+                                    std::string row, std::string colind,
+                                    std::string new_row, std::string new_colind, std::string temp) const;
 
     void codegen_transpose_data(CodeGenerator& g, std::string nrow, std::string ncol,
-                                std::string row, std::string col, std::string data, 
-                                std::string new_data) const;
+                                std::string row, std::string new_colind, std::string data, 
+                                std::string new_data, std::string iw) const;
 
     void serialize_body(SerializingStream &s) const override;
 
